@@ -5,6 +5,7 @@ from google.protobuf import struct_pb2
 import rastervision as rv
 from rastervision.backend import (BackendConfig, BackendConfigBuilder)
 from rastervision.protos.backend_pb2 import BackendConfig as BackendConfigMsg
+from rastervision.task import SemanticSegmentationConfig
 
 from fastai_plugin.semantic_segmentation_backend import SemanticSegmentationBackend
 
@@ -20,9 +21,12 @@ class SemanticSegmentationBackendConfig(BackendConfig):
         return SemanticSegmentationBackend(self.config, task_config)
 
     def to_proto(self):
+        custom_config = struct_pb2.Struct()
+        for k, v in self.config.items():
+            custom_config[k] = v
         msg = BackendConfigMsg(
             backend_type=self.backend_type,
-            custom_config=struct_pb2.Struct(self.config))
+            custom_config=custom_config)
         return msg
 
     def update_for_command(self, command_type, experiment_config,
@@ -30,9 +34,8 @@ class SemanticSegmentationBackendConfig(BackendConfig):
         super().update_for_command(command_type, experiment_config, context)
 
         if command_type == rv.CHIP:
-            self.config['chip_uri'] = experiment_config.chip_uri
-
-        if command_type == rv.TRAIN:
+            self.config['chip_uri'] = join(experiment_config.chip_uri, 'chips')
+        elif command_type == rv.TRAIN:
             self.config['train_uri'] = experiment_config.train_uri
             self.config['model_uri'] = join(experiment_config.train_uri, 'model')
 
@@ -41,24 +44,31 @@ class SemanticSegmentationBackendConfig(BackendConfig):
 
         if command_type == rv.CHIP:
             io_def.add_output(self.config['chip_uri'])
-
-        if command_type == rv.TRAIN:
+        elif command_type == rv.TRAIN:
             io_def.add_input(self.config['chip_uri'])
             io_def.add_output(self.config['model_uri'])
+        elif command_type in [rv.PREDICT, rv.BUNDLE]:
+            model_uri = self.config.get('model_uri')
+            if not model_uri:
+                io_def.add_missing('Missing model_uri.')
+            else:
+                io_def.add_input(model_uri)
 
     def save_bundle_files(self, bundle_dir):
-        if not self.model_uri:
+        model_uri = self.config.get('model_uri')
+        if not model_uri:
             raise rv.ConfigError('model_uri is not set.')
-        local_path, base_name = self.bundle_file(self.model_uri, bundle_dir)
+        local_path, base_name = self.bundle_file(model_uri, bundle_dir)
         new_config = self.to_builder() \
                          .with_model_uri(base_name) \
                          .build()
         return (new_config, [local_path])
 
     def load_bundle_files(self, bundle_dir):
-        if not self.model_uri:
+        model_uri = self.config.get('model_uri')
+        if not model_uri:
             raise rv.ConfigError('model_uri is not set.')
-        local_model_uri = join(bundle_dir, self.model_uri)
+        local_model_uri = join(bundle_dir, model_uri)
         return self.to_builder() \
                    .with_model_uri(local_model_uri) \
                    .build()
@@ -68,7 +78,8 @@ class SemanticSegmentationBackendConfigBuilder(BackendConfigBuilder):
     def __init__(self, prev_config=None):
         config = {}
         if prev_config:
-            config = prev_config.config,
+            config = prev_config.config
+
         super().__init__(FASTAI_SEMANTIC_SEGMENTATION,
                          SemanticSegmentationBackendConfig, config, prev_config)
         self.require_task = prev_config is None
@@ -92,7 +103,7 @@ class SemanticSegmentationBackendConfigBuilder(BackendConfigBuilder):
                                  "is for - use 'with_task'.")
 
         if self.require_task and not isinstance(self.task,
-                                                SemanticSegmentationBackendConfig):
+                                                SemanticSegmentationConfig):
             raise rv.ConfigError('Task set with with_task must be of type'
                                  ' SemanticSegmentationConfig, got {}.'.format(
                                      type(self.task)))
@@ -106,15 +117,12 @@ class SemanticSegmentationBackendConfigBuilder(BackendConfigBuilder):
         return [rv.SEMANTIC_SEGMENTATION]
 
     def _process_task(self):
-        pass
-
-    def _load_model_defaults(self, model_defaults):
-        pass
+        return self
 
     def with_config(self, config):
         b = deepcopy(self)
         b.config.update(config)
-        return self
+        return b
 
     def with_model_uri(self, model_uri):
         b = deepcopy(self)
