@@ -1,0 +1,2 @@
+aws batch register-job-definition --cli-input-json file://scripts/cpu_job_def.json
+aws batch register-job-definition --cli-input-json file://scripts/gpu_job_def.json

@@ -1,0 +1,18 @@
+IMAGE_NAME="raster-vision-fastai"
+ECR_CPU_IMAGE="raster-vision-cpu-lewfish"
+ECR_GPU_IMAGE="raster-vision-gpu-lewfish"
+ECR_IMAGE_TAG="fastai-plugin"
+ACCOUNT_ID=$(aws sts get-caller-identity --output text --query 'Account')
+AWS_REGION="us-east-1"
+
+aws ecr get-login --no-include-email --region ${AWS_REGION} | bash;
+
+docker tag ${IMAGE_NAME} \
+	${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_CPU_IMAGE}:${ECR_IMAGE_TAG}
+docker push \
+	${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_CPU_IMAGE}:${ECR_IMAGE_TAG}
+
+docker tag ${IMAGE_NAME} \
+	${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_GPU_IMAGE}:${ECR_IMAGE_TAG}
+docker push \
+	${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_GPU_IMAGE}:${ECR_IMAGE_TAG}

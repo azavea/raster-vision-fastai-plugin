@@ -1,0 +1,41 @@
+{
+    "jobDefinitionName": "lewfishFastaiPluginGpuJobDef",
+    "type": "container",
+    "parameters": {},
+    "containerProperties": {
+        "image": "279682201306.dkr.ecr.us-east-1.amazonaws.com/raster-vision-gpu-lewfish:fastai-plugin",
+        "vcpus": 8,
+        "memory": 55000,
+        "command": [],
+        "volumes": [
+            {
+                "host": {
+                    "sourcePath": "/home/ec2-user"
+                },
+                "name": "home"
+            },
+            {
+                "host": {
+                    "sourcePath": "/dev/shm"
+                },
+                "name": "shm"
+            }
+        ],
+        "environment": [],
+        "mountPoints": [
+            {
+                "containerPath": "/opt/data",
+                "readOnly": false,
+                "sourceVolume": "home"
+            },
+            {
+                "containerPath": "/dev/shm",
+                "readOnly": false,
+                "sourceVolume": "shm"
+            }
+        ],
+        "readonlyRootFilesystem": false,
+        "privileged": true,
+        "ulimits": []
+    }
+}
