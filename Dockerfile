@@ -50,15 +50,12 @@ RUN curl -o ~/miniconda.sh -O  https://repo.continuum.io/miniconda/Miniconda3-la
 ENV PATH /opt/conda/bin:$PATH
 RUN conda install -y python=$PYTHON_VERSION
 RUN conda install -y -c pytorch magma-cuda100=2.5 torchvision=0.2
-RUN conda install -y -c fastai fastai
-RUN conda install -y -c conda-forge awscli boto3
+RUN conda install -y -c fastai fastai=1.0.51
+RUN conda install -y -c conda-forge awscli=1.16.* boto3=1.9.*
 RUN conda clean -ya
 
-
-# RUN pip install boto3==1.7.*
-RUN pip install rastervision==0.9.0rc1
-# RUN pip install awscli
-# nvidia-ml-py3==7.352.*
+# RUN pip install rastervision==0.9.0rc1
+RUN pip install git+git://github.com/azavea/raster-vision.git@2a1640203de832b37323b7f7f5c955ef3c89bedc
 
 COPY ./fastai_plugin /opt/src/fastai_plugin
 COPY ./examples /opt/src/examples
