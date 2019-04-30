@@ -102,6 +102,7 @@ then
         -v "${HOME}"/.rastervision:/root/.rastervision \
         -v "${REPO_ROOT}"/fastai_plugin:/opt/src/fastai_plugin \
         -v "${REPO_ROOT}"/examples:/opt/src/examples \
+        -v "${REPO_ROOT}"/scripts:/opt/src/scripts \
         -v ${RASTER_VISION_DATA_DIR}:/opt/data \
         ${TENSORBOARD} ${AWS} ${JUPYTER} ${DOCS} \
         ${RV_SRC_FLAGS} \

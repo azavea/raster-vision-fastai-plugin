@@ -21,12 +21,5 @@ then
         exit
     fi
 
-    if [ -z "$RASTER_VISION_REPO" ]
-    then
-        BASE_IMAGE="quay.io/azavea/raster-vision:cpu-latest"
-    else
-        BASE_IMAGE="raster-vision-cpu"
-    fi
-
-    docker build --build-arg BASE_IMAGE="$BASE_IMAGE" -t raster-vision-fastai -f Dockerfile .
+    docker build -t raster-vision-fastai -f Dockerfile .
 fi

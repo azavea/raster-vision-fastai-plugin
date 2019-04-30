@@ -23,6 +23,7 @@ This will mount the following local directories to directories inside the contai
 * `$RASTER_VISION_DATA_DIR -> /opt/data/`
 * `fastai_plugin/ -> /opt/src/fastai_plugin/`
 * `examples/ -> /opt/src/examples/`
+* `scripts/ -> /opt/src/scripts/`
 
 This script also has options for forwarding AWS credentials (`--aws`), running Jupyter notebooks (`--jupyter`), running on a GPU (`--gpu`), and others which can be seen below.
 
@@ -52,11 +53,11 @@ For debugging, it can be helpful to use a local copy of the Raster Vision source
 
 ## Running an experiment
 
-To test the plugin, there is an [experiment](examples/simple_segmentation.py) using the SpaceNet Vegas buildings dataset. A test run can be executed locally using something like:
+To test the plugin, there is an [experiment](examples/vegas_buildings.py) using the SpaceNet Vegas buildings dataset. A test run can be executed locally using something like:
 ```
 export RAW_URI="/opt/data/raw-data/spacenet-dataset"
 export ROOT_URI="/opt/data/fastai/simple-seg/local-output/"
-rastervision -p fastai run local -e examples.simple_segmentation \
+rastervision -p fastai run local -e examples.vegas_buildings \
     -a raw_uri $RAW_URI -a root_uri $ROOT_URI \
     -a test True --splits 2
 ```
@@ -65,7 +66,7 @@ A full remote run can be executed using something like:
 ```
 export RAW_URI="s3://spacenet-dataset"
 export ROOT_URI="s3://raster-vision-lf-dev/fastai/simple-seg/remote-output/"
-rastervision -p fastai run aws_batch -e examples.simple_segmentation \
+rastervision -p fastai run aws_batch -e examples.vegas_buildings \
     -a raw_uri $RAW_URI -a root_uri $ROOT_URI \
     -a test False --splits 8
 ```
