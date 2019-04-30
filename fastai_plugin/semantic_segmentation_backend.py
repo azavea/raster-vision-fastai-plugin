@@ -209,7 +209,6 @@ class SemanticSegmentationBackend(Backend):
         print(data)
 
         if debug:
-            # TODO move into chip command and zip
             # TODO make color map based on colors in class_map
             # TODO get rid of white frame
             def _make_debug_chips(split):
@@ -234,6 +233,8 @@ class SemanticSegmentationBackend(Backend):
             learn = learn.to_fp16(loss_scale=256)
 
         # Setup ability to resume training if model exists.
+        # This hack won't properly set the learning as a function of epochs
+        # when resuming.
         learner_path = join(train_dir, 'learner.pth')
         log_path = join(train_dir, 'log')
 
@@ -288,10 +289,11 @@ class SemanticSegmentationBackend(Backend):
             Labels object containing predictions
         """
         self.load_model(tmp_dir)
-        # TODO put data on gpu
         # TODO get it to work on a whole batch at a time
-        chip = torch.Tensor(chips[0]).permute((2, 0, 1))
-        label_arr = self.inf_learner.predict(Image(chip))[1].squeeze().numpy()
+        chip = torch.Tensor(chips[0]).permute((2, 0, 1)) / 255.
+        im = Image(chip)
+
+        label_arr = self.inf_learner.predict(im)[1].squeeze().numpy()
 
         # Return "trivial" instance of SemanticSegmentationLabels that holds a single
         # window and has ability to get labels for that one window.
