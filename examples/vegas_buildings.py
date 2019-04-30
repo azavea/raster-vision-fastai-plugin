@@ -11,7 +11,7 @@ from fastai_plugin.semantic_segmentation_backend_config import (
     FASTAI_SEMANTIC_SEGMENTATION)
 
 
-class SpacenetVegasSimpleSegmentation(rv.ExperimentSet):
+class VegasBuildings(rv.ExperimentSet):
     def exp_main(self, raw_uri, root_uri, test=False):
         """Run an experiment on the Spacenet Vegas building dataset.
 
@@ -48,10 +48,10 @@ class SpacenetVegasSimpleSegmentation(rv.ExperimentSet):
 
         test = str_to_bool(test)
         exp_id = 'spacenet-simple-seg'
-        num_epochs = 20
+        num_epochs = 5
         batch_sz = 8
         debug = False
-        chip_size = 200
+        chip_size = 300
         if test:
             exp_id += '-test'
             num_epochs = 2
@@ -77,7 +77,8 @@ class SpacenetVegasSimpleSegmentation(rv.ExperimentSet):
         config = {
             'bs': batch_sz,
             'num_epochs': num_epochs,
-            'debug': debug
+            'debug': debug,
+            'lr': 1e-4
         }
 
         backend = rv.BackendConfig.builder(FASTAI_SEMANTIC_SEGMENTATION) \
