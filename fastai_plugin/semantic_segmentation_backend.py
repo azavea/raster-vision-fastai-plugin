@@ -172,10 +172,10 @@ class SemanticSegmentationBackend(Backend):
         wd = self.config.get('wd', 1e-2)
         lr = self.config.get('lr', 2e-3)
         num_epochs = int(self.config.get('num_epochs', 10))
-        model_arch = self.config.get('model_arch', models.resnet18)
+        model_arch = self.config.get('model_arch', 'resnet50')
+        model_arch = getattr(models, model_arch)
         fp16 = self.config.get('fp16', False)
         sync_interval = self.config.get('sync_interval', 1)
-        seed = int(self.config.get('seed', 1234))
         debug = self.config.get('debug', False)
 
         chip_uri = self.config['chip_uri']
@@ -205,12 +205,17 @@ class SemanticSegmentationBackend(Backend):
                 .label_from_func(get_label_path, classes=classes)
                 .transform(get_transforms(), size=size, tfm_y=True)
                 .databunch(bs=bs))
-                # .normalize(imagenet_stats))
         print(data)
 
         if debug:
+            # We make debug chips during the run-time of the train command
+            # rather than the chip command
+            # because this is a better test (see "visualize just before the net"
+            # in https://karpathy.github.io/2019/04/25/recipe/), and because
+            # it's more convenient since we have the databunch here.
             # TODO make color map based on colors in class_map
             # TODO get rid of white frame
+            # TODO zip them
             def _make_debug_chips(split):
                 debug_chips_dir = join(train_uri, '{}-debug-chips'.format(split))
                 make_dir(debug_chips_dir)
