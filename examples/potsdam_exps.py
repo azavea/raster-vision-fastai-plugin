@@ -9,7 +9,7 @@ from fastai_plugin.semantic_segmentation_backend_config import (
 
 
 class PotsdamSemanticSegmentation(rv.ExperimentSet):
-    def exp_main(self, raw_uri, processed_uri, root_uri, test=False):
+    def get_exp(self, exp_id, config, raw_uri, processed_uri, root_uri, test=False):
         """Run an experiment on the ISPRS Potsdam dataset.
 
         Args:
@@ -19,24 +19,23 @@ class PotsdamSemanticSegmentation(rv.ExperimentSet):
                 debug output
         """
         test = str_to_bool(test)
-        exp_id = 'potsdam-seg'
         train_ids = ['2-10', '2-11', '3-10', '3-11', '4-10', '4-11', '4-12', '5-10',
                      '5-11', '5-12', '6-10', '6-11', '6-7', '6-9', '7-10', '7-11',
                      '7-12', '7-7', '7-8', '7-9']
         val_ids = ['2-12', '3-12', '6-12']
         # infrared, red, green
         channel_order = [3, 0, 1]
-        debug = False
-        batch_size = 8
-        num_epochs = 10
 
+        chip_key = 'potsdam-seg'
         if test:
-            debug = True
-            num_epochs = 1
-            batch_size = 1
+            config['debug'] = True
+            config['bs'] = 1
+            config['num_epochs'] = 1
+
             train_ids = train_ids[0:1]
             val_ids = val_ids[0:1]
             exp_id += '-test'
+            chip_key += '-test'
 
         classes = {
             'Car': (1, '#ffff00'),
@@ -53,13 +52,6 @@ class PotsdamSemanticSegmentation(rv.ExperimentSet):
                             .with_chip_options(window_method='sliding',
                                                stride=300, debug_chip_probability=1.0) \
                             .build()
-
-        config = {
-            'bs': batch_size,
-            'num_epochs': num_epochs,
-            'debug': debug,
-            'lr': 1e-4
-        }
 
         backend = rv.BackendConfig.builder(FASTAI_SEMANTIC_SEGMENTATION) \
                                   .with_task(task) \
@@ -113,6 +105,7 @@ class PotsdamSemanticSegmentation(rv.ExperimentSet):
 
         experiment = rv.ExperimentConfig.builder() \
                                         .with_id(exp_id) \
+                                        .with_chip_key(chip_key) \
                                         .with_task(task) \
                                         .with_backend(backend) \
                                         .with_dataset(dataset) \
@@ -120,6 +113,32 @@ class PotsdamSemanticSegmentation(rv.ExperimentSet):
                                         .build()
 
         return experiment
+
+    def exp_resnet18(self, raw_uri, processed_uri, root_uri, test=False):
+        exp_id = 'resnet18'
+        config = {
+            'bs': 8,
+            'num_epochs': 5,
+            'debug': False,
+            'lr': 1e-4,
+            'sync_interval': 10,
+            'model_arch': 'resnet18'
+        }
+        return self.get_exp(exp_id, config, raw_uri, processed_uri, root_uri,
+                            test)
+
+    def exp_resnet50(self, raw_uri, processed_uri, root_uri, test=False):
+        exp_id = 'resnet50'
+        config = {
+            'bs': 8,
+            'num_epochs': 5,
+            'debug': False,
+            'lr': 1e-4,
+            'sync_interval': 10,
+            'model_arch': 'resnet50'
+        }
+        return self.get_exp(exp_id, config, raw_uri, processed_uri, root_uri,
+                            test)
 
 
 if __name__ == '__main__':
