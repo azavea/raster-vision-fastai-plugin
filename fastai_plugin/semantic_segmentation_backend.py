@@ -1,6 +1,5 @@
-from os.path import join, splitext, basename, dirname, isfile
+from os.path import join, basename, dirname, isfile
 import uuid
-import logging
 import zipfile
 import csv
 import glob
@@ -12,9 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from fastai.vision import (
-    get_image_files, SegmentationItemList, open_image, get_transforms,
-    imagenet_stats, models, unet_learner, Image)
-from fastai.metrics import (Precision, Recall, FBeta)
+    SegmentationItemList, get_transforms, models, unet_learner, Image)
 from fastai.callbacks import SaveModelCallback, CSVLogger, Callback
 from fastai.basic_train import load_learner
 
@@ -24,6 +21,7 @@ from rastervision.utils.files import (
 from rastervision.utils.misc import save_img
 from rastervision.backend import Backend
 from rastervision.data.label import SemanticSegmentationLabels
+from rastervision.data.label_source.utils import color_to_triple
 
 
 class SyncCallback(Callback):
@@ -73,15 +71,39 @@ def get_last_epoch(log_path):
         return 0
 
 
-nodata_id = 0
-
-
 def semseg_acc(input, target):
     # Note: custom metrics need to be at global level for learner to be saved.
+    nodata_id = 0
     target = target.squeeze(1)
-
     mask = target != nodata_id
-    return (input.argmax(dim=1)[mask]==target[mask]).float().mean()
+    return (input.argmax(dim=1)[mask] == target[mask]).float().mean()
+
+
+def make_debug_chips(data, class_map, train_dir):
+    # TODO get rid of white frame
+    # TODO zip them
+    # use grey for nodata
+    colors = [class_map.get_by_id(i).color
+              for i in range(1, len(class_map) + 1)]
+    colors = ['grey'] + colors
+    colors = [color_to_triple(c) for c in colors]
+    colors = [tuple([x / 255 for x in c]) for c in colors]
+    cmap = matplotlib.colors.ListedColormap(colors)
+
+    def _make_debug_chips(split):
+        debug_chips_dir = join(train_dir, '{}-debug-chips'.format(split))
+        make_dir(debug_chips_dir)
+        ds = data.train_ds if split == 'train' else data.valid_ds
+        for i, (x, y) in enumerate(ds):
+            plt.axis('off')
+            plt.imshow(x.data.permute((1, 2, 0)).numpy())
+            plt.imshow(y.data.squeeze().numpy(), alpha=0.4, vmin=0,
+                       vmax=len(colors), cmap=cmap)
+            plt.savefig(join(debug_chips_dir, '{}.png'.format(i)),
+                        figsize=(3, 3))
+            plt.close()
+    _make_debug_chips('train')
+    _make_debug_chips('val')
 
 
 class SemanticSegmentationBackend(Backend):
@@ -199,7 +221,8 @@ class SemanticSegmentationBackend(Backend):
             return Path(str(im_path.parent)[:-4] + '-labels') / im_path.name
 
         size = self.task_config.chip_size
-        classes = ['nodata'] + self.task_config.class_map.get_class_names()
+        class_map = self.task_config.class_map
+        classes = ['nodata'] + class_map.get_class_names()
         data = (SegmentationItemList.from_folder(chip_dir)
                 .split_by_folder(train='train-img', valid='val-img')
                 .label_from_func(get_label_path, classes=classes)
@@ -213,19 +236,7 @@ class SemanticSegmentationBackend(Backend):
             # because this is a better test (see "visualize just before the net"
             # in https://karpathy.github.io/2019/04/25/recipe/), and because
             # it's more convenient since we have the databunch here.
-            # TODO make color map based on colors in class_map
-            # TODO get rid of white frame
-            # TODO zip them
-            def _make_debug_chips(split):
-                debug_chips_dir = join(train_uri, '{}-debug-chips'.format(split))
-                make_dir(debug_chips_dir)
-                ds = data.train_ds if split == 'train' else data.valid_ds
-                for i, (x, y) in enumerate(ds):
-                    x.show(y=y)
-                    plt.savefig(join(debug_chips_dir, '{}.png'.format(i)))
-                    plt.close()
-            _make_debug_chips('train')
-            _make_debug_chips('val')
+            make_debug_chips(data, class_map, train_dir)
 
         # Setup learner.
         metrics = [semseg_acc]
