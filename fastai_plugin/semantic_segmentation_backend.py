@@ -1,6 +1,5 @@
-from os.path import join, splitext, basename, dirname, isfile
+from os.path import join, basename, dirname, isfile
 import uuid
-import logging
 import zipfile
 import csv
 import glob
@@ -12,9 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from fastai.vision import (
-    get_image_files, SegmentationItemList, open_image, get_transforms,
-    imagenet_stats, models, unet_learner, Image)
-from fastai.metrics import (Precision, Recall, FBeta)
+    SegmentationItemList, get_transforms, models, unet_learner, Image)
 from fastai.callbacks import SaveModelCallback, CSVLogger, Callback
 from fastai.basic_train import load_learner
 
@@ -73,15 +70,14 @@ def get_last_epoch(log_path):
         return 0
 
 
-nodata_id = 0
-
-
 def semseg_acc(input, target):
     # Note: custom metrics need to be at global level for learner to be saved.
+    nodata_id = 0
     target = target.squeeze(1)
-
     mask = target != nodata_id
-    return (input.argmax(dim=1)[mask]==target[mask]).float().mean()
+    return (input.argmax(dim=1)[mask] == target[mask]).float().mean()
+
+
 
 
 class SemanticSegmentationBackend(Backend):
