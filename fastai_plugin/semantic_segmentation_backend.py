@@ -35,6 +35,15 @@ class SyncCallback(Callback):
             sync_to_dir(self.from_dir, self.to_uri)
 
 
+class ExportCallback(Callback):
+    def __init__(self, learn, model_path):
+        self.learn = learn
+        self.model_path = model_path
+
+    def on_epoch_end(self, **kwargs):
+        self.learn.export(self.model_path)
+
+
 class MyCSVLogger(CSVLogger):
     """Custom CSVLogger
 
@@ -270,17 +279,16 @@ class SemanticSegmentationBackend(Backend):
         epochs_left = self.train_opts.num_epochs - start_epoch
 
         # Setup callbacks and train model.
+        model_path = get_local_path(self.backend_opts.model_uri, tmp_dir)
+        print(model_path)
         callbacks = [
             SaveModelCallback(learn, name=learner_path[:-4]),
+            ExportCallback(learn, model_path),
             MyCSVLogger(learn, filename=log_path, start_epoch=start_epoch),
             SyncCallback(train_dir, self.backend_opts.train_uri,
                          self.train_opts.sync_interval)
         ]
         learn.fit(epochs_left, self.train_opts.lr, callbacks=callbacks)
-
-        # Export model for inference
-        model_path = get_local_path(self.backend_opts.model_uri, tmp_dir)
-        learn.export(model_path)
 
         # Sync output to cloud.
         sync_to_dir(train_dir, self.backend_opts.train_uri)
