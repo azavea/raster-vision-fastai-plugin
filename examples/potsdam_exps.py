@@ -29,7 +29,7 @@ class PotsdamSemanticSegmentation(rv.ExperimentSet):
         chip_key = 'potsdam-seg'
         if test:
             config['debug'] = True
-            config['bs'] = 1
+            config['batch_sz'] = 1
             config['num_epochs'] = 1
 
             train_ids = train_ids[0:1]
@@ -55,7 +55,7 @@ class PotsdamSemanticSegmentation(rv.ExperimentSet):
 
         backend = rv.BackendConfig.builder(FASTAI_SEMANTIC_SEGMENTATION) \
                                   .with_task(task) \
-                                  .with_config(config) \
+                                  .with_train_options(**config) \
                                   .build()
 
         def make_scene(id):
@@ -117,7 +117,7 @@ class PotsdamSemanticSegmentation(rv.ExperimentSet):
     def exp_resnet18(self, raw_uri, processed_uri, root_uri, test=False):
         exp_id = 'resnet18'
         config = {
-            'bs': 8,
+            'batch_sz': 8,
             'num_epochs': 5,
             'debug': False,
             'lr': 1e-4,
@@ -130,7 +130,7 @@ class PotsdamSemanticSegmentation(rv.ExperimentSet):
     def exp_resnet50(self, raw_uri, processed_uri, root_uri, test=False):
         exp_id = 'resnet50'
         config = {
-            'bs': 8,
+            'batch_sz': 8,
             'num_epochs': 5,
             'debug': False,
             'lr': 1e-4,

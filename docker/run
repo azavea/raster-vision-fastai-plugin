@@ -104,6 +104,7 @@ then
         -v "${REPO_ROOT}"/examples:/opt/src/examples \
         -v "${REPO_ROOT}"/scripts:/opt/src/scripts \
         -v ${RASTER_VISION_DATA_DIR}:/opt/data \
+        -p 3000:3000 \
         ${TENSORBOARD} ${AWS} ${JUPYTER} ${DOCS} \
         ${RV_SRC_FLAGS} \
         ${IMAGE} "${CMD[@]}"

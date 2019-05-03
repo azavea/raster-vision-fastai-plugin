@@ -1,7 +1,6 @@
 from os.path import join, basename, dirname, isfile
 import uuid
 import zipfile
-import csv
 import glob
 from pathlib import Path
 
@@ -12,7 +11,7 @@ import numpy as np
 import torch
 from fastai.vision import (
     SegmentationItemList, get_transforms, models, unet_learner, Image)
-from fastai.callbacks import SaveModelCallback, CSVLogger, Callback
+from fastai.callbacks import SaveModelCallback
 from fastai.basic_train import load_learner
 
 from rastervision.utils.files import (
@@ -23,60 +22,9 @@ from rastervision.backend import Backend
 from rastervision.data.label import SemanticSegmentationLabels
 from rastervision.data.label_source.utils import color_to_triple
 
-
-class SyncCallback(Callback):
-    def __init__(self, from_dir, to_uri, sync_interval=1):
-        self.from_dir = from_dir
-        self.to_uri = to_uri
-        self.sync_interval = sync_interval
-
-    def on_epoch_end(self, **kwargs):
-        if (kwargs['epoch'] + 1) % self.sync_interval == 0:
-            sync_to_dir(self.from_dir, self.to_uri)
-
-
-class MyCSVLogger(CSVLogger):
-    """Custom CSVLogger
-
-    Modified to:
-    - flush after each epoch
-    - append to log if already exists
-    - use start_epoch
-    """
-    def __init__(self, learn, filename='history', start_epoch=0):
-        super().__init__(learn, filename)
-        self.start_epoch = start_epoch
-
-    def on_train_begin(self, **kwargs):
-        if self.path.exists():
-            self.file = self.path.open('a')
-        else:
-            super().on_train_begin(**kwargs)
-
-    def on_epoch_end(self, epoch, smooth_loss, last_metrics, **kwargs):
-        effective_epoch = self.start_epoch + epoch
-        out = super().on_epoch_end(
-            effective_epoch, smooth_loss, last_metrics, **kwargs)
-        self.file.flush()
-        return out
-
-
-def get_last_epoch(log_path):
-    with open(log_path, 'r') as f:
-        num_rows = 0
-        for row in csv.reader(f):
-            num_rows += 1
-        if num_rows >= 2:
-            return int(row[0])
-        return 0
-
-
-def semseg_acc(input, target):
-    # Note: custom metrics need to be at global level for learner to be saved.
-    nodata_id = 0
-    target = target.squeeze(1)
-    mask = target != nodata_id
-    return (input.argmax(dim=1)[mask] == target[mask]).float().mean()
+from fastai_plugin.utils import (
+    SyncCallback, ExportCallback, MyCSVLogger, get_last_epoch,
+    Precision, Recall, FBeta)
 
 
 def make_debug_chips(data, class_map, train_dir):
@@ -107,16 +55,23 @@ def make_debug_chips(data, class_map, train_dir):
 
 
 class SemanticSegmentationBackend(Backend):
-    def __init__(self, config, task_config):
-        # chip_uri, model_uri, train_uri
-        self.config = config
+    def __init__(self, task_config, backend_opts, train_opts):
         self.task_config = task_config
+        self.backend_opts = backend_opts
+        self.train_opts = train_opts
         self.inf_learner = None
 
+    def print_options(self):
         # TODO get logging to work for plugins
-        print('Backend config')
+        print('Backend options')
         print('--------------')
-        for k, v in self.config.items():
+        for k, v in self.backend_opts.__dict__.items():
+            print('{}: {}'.format(k, v))
+        print()
+
+        print('Train options')
+        print('--------------')
+        for k, v in self.train_opts.__dict__.items():
             print('{}: {}'.format(k, v))
         print()
 
@@ -166,9 +121,10 @@ class SemanticSegmentationBackend(Backend):
             validation_results: dependent on the ml_backend's
                 process_scene_data
         """
-        chip_uri = self.config['chip_uri']
+        self.print_options()
+
         group = str(uuid.uuid4())
-        group_uri = join(chip_uri, '{}.zip'.format(group))
+        group_uri = join(self.backend_opts.chip_uri, '{}.zip'.format(group))
         group_path = get_local_path(group_uri, tmp_dir)
         make_dir(group_path, use_dirname=True)
 
@@ -189,29 +145,17 @@ class SemanticSegmentationBackend(Backend):
 
     def train(self, tmp_dir):
         """Train a model."""
-        # Setup hyperparams.
-        bs = int(self.config.get('bs', 8))
-        wd = self.config.get('wd', 1e-2)
-        lr = self.config.get('lr', 2e-3)
-        num_epochs = int(self.config.get('num_epochs', 10))
-        model_arch = self.config.get('model_arch', 'resnet50')
-        model_arch = getattr(models, model_arch)
-        fp16 = self.config.get('fp16', False)
-        sync_interval = self.config.get('sync_interval', 1)
-        debug = self.config.get('debug', False)
-
-        chip_uri = self.config['chip_uri']
-        train_uri = self.config['train_uri']
+        self.print_options()
 
         # Sync output of previous training run from cloud.
-        train_dir = get_local_path(train_uri, tmp_dir)
+        train_dir = get_local_path(self.backend_opts.train_uri, tmp_dir)
         make_dir(train_dir)
-        sync_from_dir(train_uri, train_dir)
+        sync_from_dir(self.backend_opts.train_uri, train_dir)
 
         # Get zip file for each group, and unzip them into chip_dir.
         chip_dir = join(tmp_dir, 'chips')
         make_dir(chip_dir)
-        for zip_uri in list_paths(chip_uri, 'zip'):
+        for zip_uri in list_paths(self.backend_opts.chip_uri, 'zip'):
             zip_path = download_if_needed(zip_uri, tmp_dir)
             with zipfile.ZipFile(zip_path, 'r') as zipf:
                 zipf.extractall(chip_dir)
@@ -223,14 +167,16 @@ class SemanticSegmentationBackend(Backend):
         size = self.task_config.chip_size
         class_map = self.task_config.class_map
         classes = ['nodata'] + class_map.get_class_names()
+        num_workers = 0 if self.train_opts.debug else 4
         data = (SegmentationItemList.from_folder(chip_dir)
                 .split_by_folder(train='train-img', valid='val-img')
                 .label_from_func(get_label_path, classes=classes)
                 .transform(get_transforms(), size=size, tfm_y=True)
-                .databunch(bs=bs))
+                .databunch(bs=self.train_opts.batch_sz,
+                           num_workers=num_workers))
         print(data)
 
-        if debug:
+        if self.train_opts.debug:
             # We make debug chips during the run-time of the train command
             # rather than the chip command
             # because this is a better test (see "visualize just before the net"
@@ -239,11 +185,18 @@ class SemanticSegmentationBackend(Backend):
             make_debug_chips(data, class_map, train_dir)
 
         # Setup learner.
-        metrics = [semseg_acc]
-        learn = unet_learner(data, model_arch, metrics=metrics, wd=wd, bottle=True)
+        ignore_idx = 0
+        metrics = [
+            Precision(average='weighted', clas_idx=1, ignore_idx=ignore_idx),
+            Recall(average='weighted', clas_idx=1, ignore_idx=ignore_idx),
+            FBeta(average='weighted', clas_idx=1, beta=1, ignore_idx=ignore_idx)]
+        model_arch = getattr(models, self.train_opts.model_arch)
+        learn = unet_learner(
+            data, model_arch, metrics=metrics, wd=self.train_opts.weight_decay,
+            bottle=True)
         learn.unfreeze()
 
-        if fp16 and torch.cuda.is_available():
+        if self.train_opts.fp16 and torch.cuda.is_available():
             # This loss_scale works for Resnet 34 and 50. You might need to adjust this
             # for other models.
             learn = learn.to_fp16(loss_scale=256)
@@ -258,38 +211,38 @@ class SemanticSegmentationBackend(Backend):
         if isfile(learner_path):
             print('Loading saved model...')
             start_epoch = get_last_epoch(str(log_path) + '.csv') + 1
-            if start_epoch >= num_epochs:
+            if start_epoch >= self.train_opts.num_epochs:
                 print('Training is already done. If you would like to re-train'
                       ', delete the previous results of training in '
-                      '{}.'.format(train_uri))
+                      '{}.'.format(self.backend_opts.train_uri))
                 return
 
             learn.load(learner_path[:-4])
             print('Resuming from epoch {}'.format(start_epoch))
-            print('Note: fastai does not support a start_epoch, so epoch 0 below '
-                  'corresponds to {}'.format(start_epoch))
-        epochs_left = num_epochs - start_epoch
+            print('Note: fastai does not support a start_epoch, so epoch 0 '
+                  'below corresponds to {}'.format(start_epoch))
+        epochs_left = self.train_opts.num_epochs - start_epoch
 
         # Setup callbacks and train model.
+        model_path = get_local_path(self.backend_opts.model_uri, tmp_dir)
+        print(model_path)
         callbacks = [
             SaveModelCallback(learn, name=learner_path[:-4]),
+            ExportCallback(learn, model_path),
             MyCSVLogger(learn, filename=log_path, start_epoch=start_epoch),
-            SyncCallback(train_dir, train_uri, sync_interval)
+            SyncCallback(train_dir, self.backend_opts.train_uri,
+                         self.train_opts.sync_interval)
         ]
-        learn.fit(epochs_left, lr, callbacks=callbacks)
-
-        # Export model for inference
-        model_uri = self.config['model_uri']
-        model_path = get_local_path(model_uri, tmp_dir)
-        learn.export(model_path)
+        learn.fit(epochs_left, self.train_opts.lr, callbacks=callbacks)
 
         # Sync output to cloud.
-        sync_to_dir(train_dir, train_uri)
+        sync_to_dir(train_dir, self.backend_opts.train_uri)
 
     def load_model(self, tmp_dir):
         """Load the model in preparation for one or more prediction calls."""
         if self.inf_learner is None:
-            model_uri = self.config['model_uri']
+            self.print_options()
+            model_uri = self.backend_opts.model_uri
             model_path = download_if_needed(model_uri, tmp_dir)
             self.inf_learner = load_learner(
                 dirname(model_path), basename(model_path))
