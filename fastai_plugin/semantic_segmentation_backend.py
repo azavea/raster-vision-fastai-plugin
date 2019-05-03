@@ -1,7 +1,6 @@
 from os.path import join, basename, dirname, isfile
 import uuid
 import zipfile
-import csv
 import glob
 from pathlib import Path
 
@@ -12,7 +11,7 @@ import numpy as np
 import torch
 from fastai.vision import (
     SegmentationItemList, get_transforms, models, unet_learner, Image)
-from fastai.callbacks import SaveModelCallback, CSVLogger, Callback
+from fastai.callbacks import SaveModelCallback
 from fastai.basic_train import load_learner
 
 from rastervision.utils.files import (
@@ -23,69 +22,9 @@ from rastervision.backend import Backend
 from rastervision.data.label import SemanticSegmentationLabels
 from rastervision.data.label_source.utils import color_to_triple
 
-
-class SyncCallback(Callback):
-    def __init__(self, from_dir, to_uri, sync_interval=1):
-        self.from_dir = from_dir
-        self.to_uri = to_uri
-        self.sync_interval = sync_interval
-
-    def on_epoch_end(self, **kwargs):
-        if (kwargs['epoch'] + 1) % self.sync_interval == 0:
-            sync_to_dir(self.from_dir, self.to_uri)
-
-
-class ExportCallback(Callback):
-    def __init__(self, learn, model_path):
-        self.learn = learn
-        self.model_path = model_path
-
-    def on_epoch_end(self, **kwargs):
-        self.learn.export(self.model_path)
-
-
-class MyCSVLogger(CSVLogger):
-    """Custom CSVLogger
-
-    Modified to:
-    - flush after each epoch
-    - append to log if already exists
-    - use start_epoch
-    """
-    def __init__(self, learn, filename='history', start_epoch=0):
-        super().__init__(learn, filename)
-        self.start_epoch = start_epoch
-
-    def on_train_begin(self, **kwargs):
-        if self.path.exists():
-            self.file = self.path.open('a')
-        else:
-            super().on_train_begin(**kwargs)
-
-    def on_epoch_end(self, epoch, smooth_loss, last_metrics, **kwargs):
-        effective_epoch = self.start_epoch + epoch
-        out = super().on_epoch_end(
-            effective_epoch, smooth_loss, last_metrics, **kwargs)
-        self.file.flush()
-        return out
-
-
-def get_last_epoch(log_path):
-    with open(log_path, 'r') as f:
-        num_rows = 0
-        for row in csv.reader(f):
-            num_rows += 1
-        if num_rows >= 2:
-            return int(row[0])
-        return 0
-
-
-def semseg_acc(input, target):
-    # Note: custom metrics need to be at global level for learner to be saved.
-    nodata_id = 0
-    target = target.squeeze(1)
-    mask = target != nodata_id
-    return (input.argmax(dim=1)[mask] == target[mask]).float().mean()
+from fastai_plugin.utils import (
+    SyncCallback, ExportCallback, MyCSVLogger, get_last_epoch,
+    Precision, Recall, FBeta)
 
 
 def make_debug_chips(data, class_map, train_dir):
@@ -228,11 +167,13 @@ class SemanticSegmentationBackend(Backend):
         size = self.task_config.chip_size
         class_map = self.task_config.class_map
         classes = ['nodata'] + class_map.get_class_names()
+        num_workers = 0 if self.train_opts.debug else 4
         data = (SegmentationItemList.from_folder(chip_dir)
                 .split_by_folder(train='train-img', valid='val-img')
                 .label_from_func(get_label_path, classes=classes)
                 .transform(get_transforms(), size=size, tfm_y=True)
-                .databunch(bs=self.train_opts.batch_sz))
+                .databunch(bs=self.train_opts.batch_sz,
+                           num_workers=num_workers))
         print(data)
 
         if self.train_opts.debug:
@@ -244,7 +185,11 @@ class SemanticSegmentationBackend(Backend):
             make_debug_chips(data, class_map, train_dir)
 
         # Setup learner.
-        metrics = [semseg_acc]
+        ignore_idx = 0
+        metrics = [
+            Precision(average='weighted', clas_idx=1, ignore_idx=ignore_idx),
+            Recall(average='weighted', clas_idx=1, ignore_idx=ignore_idx),
+            FBeta(average='weighted', clas_idx=1, beta=1, ignore_idx=ignore_idx)]
         model_arch = getattr(models, self.train_opts.model_arch)
         learn = unet_learner(
             data, model_arch, metrics=metrics, wd=self.train_opts.weight_decay,
