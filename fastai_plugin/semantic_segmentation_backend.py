@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from fastai.vision import (
     SegmentationItemList, get_transforms, models, unet_learner, Image)
-from fastai.callbacks import SaveModelCallback
+from fastai.callbacks import SaveModelCallback, CSVLogger, TrackEpochCallback
 from fastai.basic_train import load_learner
 
 from rastervision.utils.files import (
@@ -193,7 +193,7 @@ class SemanticSegmentationBackend(Backend):
         model_arch = getattr(models, self.train_opts.model_arch)
         learn = unet_learner(
             data, model_arch, metrics=metrics, wd=self.train_opts.weight_decay,
-            bottle=True)
+            bottle=True, path=train_dir)
         learn.unfreeze()
 
         if self.train_opts.fp16 and torch.cuda.is_available():
@@ -201,39 +201,19 @@ class SemanticSegmentationBackend(Backend):
             # for other models.
             learn = learn.to_fp16(loss_scale=256)
 
-        # Setup ability to resume training if model exists.
-        # This hack won't properly set the learning as a function of epochs
-        # when resuming.
-        learner_path = join(train_dir, 'learner.pth')
-        log_path = join(train_dir, 'log')
-
-        start_epoch = 0
-        if isfile(learner_path):
-            print('Loading saved model...')
-            start_epoch = get_last_epoch(str(log_path) + '.csv') + 1
-            if start_epoch >= self.train_opts.num_epochs:
-                print('Training is already done. If you would like to re-train'
-                      ', delete the previous results of training in '
-                      '{}.'.format(self.backend_opts.train_uri))
-                return
-
-            learn.load(learner_path[:-4])
-            print('Resuming from epoch {}'.format(start_epoch))
-            print('Note: fastai does not support a start_epoch, so epoch 0 '
-                  'below corresponds to {}'.format(start_epoch))
-        epochs_left = self.train_opts.num_epochs - start_epoch
-
         # Setup callbacks and train model.
         model_path = get_local_path(self.backend_opts.model_uri, tmp_dir)
         print(model_path)
         callbacks = [
-            SaveModelCallback(learn, name=learner_path[:-4]),
+            TrackEpochCallback(learn),
+            SaveModelCallback(learn, every='epoch'),
+            MyCSVLogger(learn, filename='log'),
             ExportCallback(learn, model_path),
-            MyCSVLogger(learn, filename=log_path, start_epoch=start_epoch),
             SyncCallback(train_dir, self.backend_opts.train_uri,
                          self.train_opts.sync_interval)
         ]
-        learn.fit(epochs_left, self.train_opts.lr, callbacks=callbacks)
+        learn.fit(self.train_opts.num_epochs, self.train_opts.lr,
+                  callbacks=callbacks)
 
         # Sync output to cloud.
         sync_to_dir(train_dir, self.backend_opts.train_uri)
