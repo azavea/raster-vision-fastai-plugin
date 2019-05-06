@@ -203,7 +203,14 @@ class SemanticSegmentationBackend(Backend):
 
         # Setup callbacks and train model.
         model_path = get_local_path(self.backend_opts.model_uri, tmp_dir)
-        print(model_path)
+
+        pretrained_uri = self.backend_opts.pretrained_uri
+        if pretrained_uri:
+            print('Loading weights from pretrained_uri: {}'.format(
+                pretrained_uri))
+            pretrained_path = download_if_needed(pretrained_uri, tmp_dir)
+            learn.load(pretrained_path[:-4])
+
         callbacks = [
             TrackEpochCallback(learn),
             SaveModelCallback(learn, every='epoch'),

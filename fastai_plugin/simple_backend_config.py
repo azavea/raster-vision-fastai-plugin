@@ -11,10 +11,12 @@ from rastervision.task import SemanticSegmentationConfig
 
 
 class BackendOptions():
-    def __init__(self, chip_uri=None, train_uri=None, model_uri=None):
+    def __init__(self, chip_uri=None, train_uri=None, model_uri=None,
+                 pretrained_uri=None):
         self.chip_uri = chip_uri
         self.train_uri = train_uri
         self.model_uri = model_uri
+        self.pretrained_uri = pretrained_uri
 
 
 class SimpleBackendConfig(BackendConfig):
@@ -158,4 +160,9 @@ class SimpleBackendConfigBuilder(BackendConfigBuilder):
     def with_model_uri(self, model_uri):
         b = deepcopy(self)
         b.backend_opts.model_uri = model_uri
+        return b
+
+    def with_pretrained_uri(self, pretrained_uri):
+        b = deepcopy(self)
+        b.backend_opts.pretrained_uri = pretrained_uri
         return b

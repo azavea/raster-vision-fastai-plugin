@@ -58,6 +58,10 @@ class SemanticSegmentationBackendConfigBuilder(SimpleBackendConfigBuilder):
             sync_interval=sync_interval, debug=debug)
         return b
 
+    def with_pretrained_uri(self, pretrained_uri):
+        """pretrained_uri should be uri of exported model file."""
+        return super().with_pretrained_uri(pretrained_uri)
+
 
 def register_plugin(plugin_registry):
     plugin_registry.register_config_builder(
