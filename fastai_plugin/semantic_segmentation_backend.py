@@ -16,7 +16,7 @@ from fastai.basic_train import load_learner
 
 from rastervision.utils.files import (
         get_local_path, make_dir, upload_or_copy, list_paths,
-        download_if_needed, sync_from_dir, sync_to_dir)
+        download_if_needed, sync_from_dir, sync_to_dir, str_to_file)
 from rastervision.utils.misc import save_img
 from rastervision.backend import Backend
 from rastervision.data.label import SemanticSegmentationLabels
@@ -221,6 +221,10 @@ class SemanticSegmentationBackend(Backend):
         ]
         learn.fit(self.train_opts.num_epochs, self.train_opts.lr,
                   callbacks=callbacks)
+
+        # Since model is exported every epoch, we need some other way to
+        # show that training is finished.
+        str_to_file('done!', self.backend_opts.train_done_uri)
 
         # Sync output to cloud.
         sync_to_dir(train_dir, self.backend_opts.train_uri)

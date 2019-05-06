@@ -11,10 +11,11 @@ from rastervision.task import SemanticSegmentationConfig
 
 
 class BackendOptions():
-    def __init__(self, chip_uri=None, train_uri=None, model_uri=None,
-                 pretrained_uri=None):
+    def __init__(self, chip_uri=None, train_uri=None, train_done_uri=None,
+                 model_uri=None, pretrained_uri=None):
         self.chip_uri = chip_uri
         self.train_uri = train_uri
+        self.train_done_uri = train_done_uri
         self.model_uri = model_uri
         self.pretrained_uri = pretrained_uri
 
@@ -67,6 +68,8 @@ class SimpleBackendConfig(BackendConfig):
             self.backend_opts.train_uri = experiment_config.train_uri
             self.backend_opts.model_uri = join(
                 experiment_config.train_uri, 'model')
+            self.backend_opts.train_done_uri = join(
+                experiment_config.train_uri, 'done.txt')
 
     def report_io(self, command_type, io_def):
         super().report_io(command_type, io_def)
@@ -76,11 +79,15 @@ class SimpleBackendConfig(BackendConfig):
         elif command_type == rv.TRAIN:
             io_def.add_input(self.backend_opts.chip_uri)
             io_def.add_output(self.backend_opts.model_uri)
+            io_def.add_output(self.backend_opts.train_done_uri)
         elif command_type in [rv.PREDICT, rv.BUNDLE]:
             if not self.backend_opts.model_uri:
                 io_def.add_missing('Missing model_uri.')
             else:
                 io_def.add_input(self.backend_opts.model_uri)
+                io_def.add_input(self.backend_opts.train_done_uri)
+        elif command_type == rv.EVAL:
+            io_def.add_input()
 
     def save_bundle_files(self, bundle_dir):
         model_uri = self.backend_opts.model_uri
