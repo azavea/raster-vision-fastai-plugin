@@ -1,4 +1,7 @@
 import csv
+import os
+from os.path import join
+import zipfile
 
 from fastai.callbacks import CSVLogger, Callback
 from fastai.metrics import add_metrics
@@ -35,9 +38,8 @@ class MyCSVLogger(CSVLogger):
     - append to log if already exists
     - use start_epoch
     """
-    def __init__(self, learn, filename='history', start_epoch=0):
+    def __init__(self, learn, filename='history'):
         super().__init__(learn, filename)
-        self.start_epoch = start_epoch
 
     def on_train_begin(self, **kwargs):
         if self.path.exists():
@@ -46,9 +48,8 @@ class MyCSVLogger(CSVLogger):
             super().on_train_begin(**kwargs)
 
     def on_epoch_end(self, epoch, smooth_loss, last_metrics, **kwargs):
-        effective_epoch = self.start_epoch + epoch
         out = super().on_epoch_end(
-            effective_epoch, smooth_loss, last_metrics, **kwargs)
+            epoch, smooth_loss, last_metrics, **kwargs)
         self.file.flush()
         return out
 
@@ -161,3 +162,12 @@ class FBeta(CMScores):
         return add_metrics(last_metrics, metric)
 
     def on_train_end(self, **kwargs): self.average = self.avg
+
+
+def zipdir(dir, zip_path):
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as ziph:
+        for root, dirs, files in os.walk(dir):
+            for file in files:
+                ziph.write(join(root, file),
+                           join('/'.join(dirs),
+                                os.path.basename(file)))

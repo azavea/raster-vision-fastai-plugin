@@ -3,6 +3,7 @@ import uuid
 import zipfile
 import glob
 from pathlib import Path
+import random
 
 import matplotlib
 matplotlib.use("Agg")
@@ -11,12 +12,12 @@ import numpy as np
 import torch
 from fastai.vision import (
     SegmentationItemList, get_transforms, models, unet_learner, Image)
-from fastai.callbacks import SaveModelCallback
+from fastai.callbacks import SaveModelCallback, CSVLogger, TrackEpochCallback
 from fastai.basic_train import load_learner
 
 from rastervision.utils.files import (
         get_local_path, make_dir, upload_or_copy, list_paths,
-        download_if_needed, sync_from_dir, sync_to_dir)
+        download_if_needed, sync_from_dir, sync_to_dir, str_to_file)
 from rastervision.utils.misc import save_img
 from rastervision.backend import Backend
 from rastervision.data.label import SemanticSegmentationLabels
@@ -24,13 +25,13 @@ from rastervision.data.label_source.utils import color_to_triple
 
 from fastai_plugin.utils import (
     SyncCallback, ExportCallback, MyCSVLogger, get_last_epoch,
-    Precision, Recall, FBeta)
+    Precision, Recall, FBeta, zipdir)
 
 
-def make_debug_chips(data, class_map, train_dir):
+def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
     # TODO get rid of white frame
-    # TODO zip them
     # use grey for nodata
+
     colors = [class_map.get_by_id(i).color
               for i in range(1, len(class_map) + 1)]
     colors = ['grey'] + colors
@@ -39,17 +40,23 @@ def make_debug_chips(data, class_map, train_dir):
     cmap = matplotlib.colors.ListedColormap(colors)
 
     def _make_debug_chips(split):
-        debug_chips_dir = join(train_dir, '{}-debug-chips'.format(split))
+        debug_chips_dir = join(tmp_dir, '{}-debug-chips'.format(split))
+        zip_path = join(tmp_dir, '{}-debug-chips.zip'.format(split))
+        zip_uri = join(train_uri, '{}-debug-chips.zip'.format(split))
         make_dir(debug_chips_dir)
         ds = data.train_ds if split == 'train' else data.valid_ds
         for i, (x, y) in enumerate(ds):
-            plt.axis('off')
-            plt.imshow(x.data.permute((1, 2, 0)).numpy())
-            plt.imshow(y.data.squeeze().numpy(), alpha=0.4, vmin=0,
-                       vmax=len(colors), cmap=cmap)
-            plt.savefig(join(debug_chips_dir, '{}.png'.format(i)),
-                        figsize=(3, 3))
-            plt.close()
+            if random.uniform(0, 1) < debug_prob:
+                plt.axis('off')
+                plt.imshow(x.data.permute((1, 2, 0)).numpy())
+                plt.imshow(y.data.squeeze().numpy(), alpha=0.4, vmin=0,
+                           vmax=len(colors), cmap=cmap)
+                plt.savefig(join(debug_chips_dir, '{}.png'.format(i)),
+                            figsize=(3, 3))
+                plt.close()
+        zipdir(debug_chips_dir, zip_path)
+        upload_or_copy(zip_path, zip_uri)
+
     _make_debug_chips('train')
     _make_debug_chips('val')
 
@@ -148,9 +155,10 @@ class SemanticSegmentationBackend(Backend):
         self.print_options()
 
         # Sync output of previous training run from cloud.
-        train_dir = get_local_path(self.backend_opts.train_uri, tmp_dir)
+        train_uri = self.backend_opts.train_uri
+        train_dir = get_local_path(train_uri, tmp_dir)
         make_dir(train_dir)
-        sync_from_dir(self.backend_opts.train_uri, train_dir)
+        sync_from_dir(train_uri, train_dir)
 
         # Get zip file for each group, and unzip them into chip_dir.
         chip_dir = join(tmp_dir, 'chips')
@@ -177,12 +185,7 @@ class SemanticSegmentationBackend(Backend):
         print(data)
 
         if self.train_opts.debug:
-            # We make debug chips during the run-time of the train command
-            # rather than the chip command
-            # because this is a better test (see "visualize just before the net"
-            # in https://karpathy.github.io/2019/04/25/recipe/), and because
-            # it's more convenient since we have the databunch here.
-            make_debug_chips(data, class_map, train_dir)
+            make_debug_chips(data, class_map, tmp_dir, train_uri)
 
         # Setup learner.
         ignore_idx = 0
@@ -193,7 +196,7 @@ class SemanticSegmentationBackend(Backend):
         model_arch = getattr(models, self.train_opts.model_arch)
         learn = unet_learner(
             data, model_arch, metrics=metrics, wd=self.train_opts.weight_decay,
-            bottle=True)
+            bottle=True, path=train_dir)
         learn.unfreeze()
 
         if self.train_opts.fp16 and torch.cuda.is_available():
@@ -201,39 +204,30 @@ class SemanticSegmentationBackend(Backend):
             # for other models.
             learn = learn.to_fp16(loss_scale=256)
 
-        # Setup ability to resume training if model exists.
-        # This hack won't properly set the learning as a function of epochs
-        # when resuming.
-        learner_path = join(train_dir, 'learner.pth')
-        log_path = join(train_dir, 'log')
-
-        start_epoch = 0
-        if isfile(learner_path):
-            print('Loading saved model...')
-            start_epoch = get_last_epoch(str(log_path) + '.csv') + 1
-            if start_epoch >= self.train_opts.num_epochs:
-                print('Training is already done. If you would like to re-train'
-                      ', delete the previous results of training in '
-                      '{}.'.format(self.backend_opts.train_uri))
-                return
-
-            learn.load(learner_path[:-4])
-            print('Resuming from epoch {}'.format(start_epoch))
-            print('Note: fastai does not support a start_epoch, so epoch 0 '
-                  'below corresponds to {}'.format(start_epoch))
-        epochs_left = self.train_opts.num_epochs - start_epoch
-
         # Setup callbacks and train model.
         model_path = get_local_path(self.backend_opts.model_uri, tmp_dir)
-        print(model_path)
+
+        pretrained_uri = self.backend_opts.pretrained_uri
+        if pretrained_uri:
+            print('Loading weights from pretrained_uri: {}'.format(
+                pretrained_uri))
+            pretrained_path = download_if_needed(pretrained_uri, tmp_dir)
+            learn.load(pretrained_path[:-4])
+
         callbacks = [
-            SaveModelCallback(learn, name=learner_path[:-4]),
+            TrackEpochCallback(learn),
+            SaveModelCallback(learn, every='epoch'),
+            MyCSVLogger(learn, filename='log'),
             ExportCallback(learn, model_path),
-            MyCSVLogger(learn, filename=log_path, start_epoch=start_epoch),
             SyncCallback(train_dir, self.backend_opts.train_uri,
                          self.train_opts.sync_interval)
         ]
-        learn.fit(epochs_left, self.train_opts.lr, callbacks=callbacks)
+        learn.fit(self.train_opts.num_epochs, self.train_opts.lr,
+                  callbacks=callbacks)
+
+        # Since model is exported every epoch, we need some other way to
+        # show that training is finished.
+        str_to_file('done!', self.backend_opts.train_done_uri)
 
         # Sync output to cloud.
         sync_to_dir(train_dir, self.backend_opts.train_uri)
