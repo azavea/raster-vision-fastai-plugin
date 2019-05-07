@@ -3,6 +3,7 @@ import uuid
 import zipfile
 import glob
 from pathlib import Path
+import random
 
 import matplotlib
 matplotlib.use("Agg")
@@ -24,13 +25,13 @@ from rastervision.data.label_source.utils import color_to_triple
 
 from fastai_plugin.utils import (
     SyncCallback, ExportCallback, MyCSVLogger, get_last_epoch,
-    Precision, Recall, FBeta)
+    Precision, Recall, FBeta, zipdir)
 
 
-def make_debug_chips(data, class_map, train_dir):
+def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
     # TODO get rid of white frame
-    # TODO zip them
     # use grey for nodata
+
     colors = [class_map.get_by_id(i).color
               for i in range(1, len(class_map) + 1)]
     colors = ['grey'] + colors
@@ -39,17 +40,23 @@ def make_debug_chips(data, class_map, train_dir):
     cmap = matplotlib.colors.ListedColormap(colors)
 
     def _make_debug_chips(split):
-        debug_chips_dir = join(train_dir, '{}-debug-chips'.format(split))
+        debug_chips_dir = join(tmp_dir, '{}-debug-chips'.format(split))
+        zip_path = join(tmp_dir, '{}-debug-chips.zip'.format(split))
+        zip_uri = join(train_uri, '{}-debug-chips.zip'.format(split))
         make_dir(debug_chips_dir)
         ds = data.train_ds if split == 'train' else data.valid_ds
         for i, (x, y) in enumerate(ds):
-            plt.axis('off')
-            plt.imshow(x.data.permute((1, 2, 0)).numpy())
-            plt.imshow(y.data.squeeze().numpy(), alpha=0.4, vmin=0,
-                       vmax=len(colors), cmap=cmap)
-            plt.savefig(join(debug_chips_dir, '{}.png'.format(i)),
-                        figsize=(3, 3))
-            plt.close()
+            if random.uniform(0, 1) < debug_prob:
+                plt.axis('off')
+                plt.imshow(x.data.permute((1, 2, 0)).numpy())
+                plt.imshow(y.data.squeeze().numpy(), alpha=0.4, vmin=0,
+                           vmax=len(colors), cmap=cmap)
+                plt.savefig(join(debug_chips_dir, '{}.png'.format(i)),
+                            figsize=(3, 3))
+                plt.close()
+        zipdir(debug_chips_dir, zip_path)
+        upload_or_copy(zip_path, zip_uri)
+
     _make_debug_chips('train')
     _make_debug_chips('val')
 
@@ -148,9 +155,10 @@ class SemanticSegmentationBackend(Backend):
         self.print_options()
 
         # Sync output of previous training run from cloud.
-        train_dir = get_local_path(self.backend_opts.train_uri, tmp_dir)
+        train_uri = self.backend_opts.train_uri
+        train_dir = get_local_path(train_uri, tmp_dir)
         make_dir(train_dir)
-        sync_from_dir(self.backend_opts.train_uri, train_dir)
+        sync_from_dir(train_uri, train_dir)
 
         # Get zip file for each group, and unzip them into chip_dir.
         chip_dir = join(tmp_dir, 'chips')
@@ -177,12 +185,7 @@ class SemanticSegmentationBackend(Backend):
         print(data)
 
         if self.train_opts.debug:
-            # We make debug chips during the run-time of the train command
-            # rather than the chip command
-            # because this is a better test (see "visualize just before the net"
-            # in https://karpathy.github.io/2019/04/25/recipe/), and because
-            # it's more convenient since we have the databunch here.
-            make_debug_chips(data, class_map, train_dir)
+            make_debug_chips(data, class_map, tmp_dir, train_uri)
 
         # Setup learner.
         ignore_idx = 0

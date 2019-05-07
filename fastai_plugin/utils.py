@@ -1,4 +1,7 @@
 import csv
+import os
+from os.path import join
+import zipfile
 
 from fastai.callbacks import CSVLogger, Callback
 from fastai.metrics import add_metrics
@@ -159,3 +162,12 @@ class FBeta(CMScores):
         return add_metrics(last_metrics, metric)
 
     def on_train_end(self, **kwargs): self.average = self.avg
+
+
+def zipdir(dir, zip_path):
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as ziph:
+        for root, dirs, files in os.walk(dir):
+            for file in files:
+                ziph.write(join(root, file),
+                           join('/'.join(dirs),
+                                os.path.basename(file)))
