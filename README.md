@@ -60,13 +60,13 @@ modules=["fastai_plugin.semantic_segmentation_backend_config"]
 
 ## Running an experiment
 
-To test the plugin, you can run an [experiment](examples/potsdam_exps.py) using the ISPRS Potsdam dataset. Info on setting up the data and experiments in general can be found in the [examples repo](https://github.com/azavea/raster-vision-examples#isprs-potsdam-semantic-segmentation). A test run can be executed locally using something like the following. The `-p fastai` flag says to use the `fastai` profile created above.
+To test the plugin, you can run an [experiment](examples/potsdam.py) using the ISPRS Potsdam dataset. Info on setting up the data and experiments in general can be found in the [examples repo](https://github.com/azavea/raster-vision-examples#isprs-potsdam-semantic-segmentation). A test run can be executed locally using something like the following. The `-p fastai` flag says to use the `fastai` profile created above.
 
 ```
 export RAW_URI="/opt/data/raw-data/isprs-potsdam"
 export PROCESSED_URI="/opt/data/fastai/potsdam/processed-data"
 export ROOT_URI="/opt/data/fastai/potsdam/local-output"
-rastervision -p fastai run local -e examples.potsdam_exps -m *exp_resnet50* \
+rastervision -p fastai run local -e examples.semseg.potsdam -m *exp_resnet50* \
     -a raw_uri $RAW_URI -a processed_uri $PROCESSED_URI -a root_uri $ROOT_URI \
     -a test True --splits 2
 ```
@@ -77,7 +77,7 @@ A full experiment can be run on AWS Batch using something like:
 export RAW_URI="s3://raster-vision-raw-data/isprs-potsdam"
 export PROCESSED_URI="s3://raster-vision-lf-dev/fastai/potsdam/processed-data"
 export ROOT_URI="s3://raster-vision-lf-dev/fastai/potsdam/remote-output"
-rastervision -p fastai run aws_batch -e examples.potsdam_exps -m *resnet18* \
+rastervision -p fastai run aws_batch -e examples.semseg.potsdam -m *resnet18* \
     -a raw_uri $RAW_URI -a processed_uri $PROCESSED_URI -a root_uri $ROOT_URI \
     -a test False --splits 4
 ```
