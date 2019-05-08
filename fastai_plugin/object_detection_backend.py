@@ -11,34 +11,25 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from fastai.vision import (
-    SegmentationItemList, get_transforms, models, unet_learner, Image)
+    ObjectItemList, bb_pad_collate, get_transforms, models,
+    Image)
 from fastai.callbacks import SaveModelCallback, CSVLogger, TrackEpochCallback
 from fastai.basic_train import load_learner
 
 from rastervision.utils.files import (
-        get_local_path, make_dir, upload_or_copy, list_paths,
-        download_if_needed, sync_from_dir, sync_to_dir, str_to_file)
+    get_local_path, make_dir, upload_or_copy, list_paths,
+    download_if_needed, sync_from_dir, sync_to_dir, str_to_file,
+    json_to_file)
 from rastervision.utils.misc import save_img
 from rastervision.backend import Backend
-from rastervision.data.label import SemanticSegmentationLabels
-from rastervision.data.label_source.utils import color_to_triple
+from rastervision.data import ObjectDetectionLabels
 
 from fastai_plugin.utils import (
     SyncCallback, ExportCallback, MyCSVLogger, get_last_epoch,
-    Precision, Recall, FBeta, zipdir)
+    Precision, Recall, FBeta, zipdir, get_annotations)
 
 
 def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
-    # TODO get rid of white frame
-    # use grey for nodata
-
-    colors = [class_map.get_by_id(i).color
-              for i in range(1, len(class_map) + 1)]
-    colors = ['grey'] + colors
-    colors = [color_to_triple(c) for c in colors]
-    colors = [tuple([x / 255 for x in c]) for c in colors]
-    cmap = matplotlib.colors.ListedColormap(colors)
-
     def _make_debug_chips(split):
         debug_chips_dir = join(tmp_dir, '{}-debug-chips'.format(split))
         zip_path = join(tmp_dir, '{}-debug-chips.zip'.format(split))
@@ -47,10 +38,7 @@ def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
         ds = data.train_ds if split == 'train' else data.valid_ds
         for i, (x, y) in enumerate(ds):
             if random.uniform(0, 1) < debug_prob:
-                plt.axis('off')
-                plt.imshow(x.data.permute((1, 2, 0)).numpy())
-                plt.imshow(y.data.squeeze().numpy(), alpha=0.4, vmin=0,
-                           vmax=len(colors), cmap=cmap)
+                x.show(y=y)
                 plt.savefig(join(debug_chips_dir, '{}.png'.format(i)),
                             figsize=(3, 3))
                 plt.close()
@@ -85,8 +73,8 @@ class ObjectDetectionBackend(Backend):
     def process_scene_data(self, scene, data, tmp_dir):
         """Process each scene's training data.
 
-        This writes {scene_id}/img/{scene_id}-{ind}.png and
-        {scene_id}/labels/{scene_id}-{ind}.png
+        This writes {scene_id}/{scene_id}-{ind}.png and
+        {scene_id}/{scene_id}-labels.json in COCO format.
 
         Args:
             scene: Scene
@@ -96,19 +84,47 @@ class ObjectDetectionBackend(Backend):
             backend-specific data-structures consumed by backend's
             process_sceneset_results
         """
+
         scene_dir = join(tmp_dir, str(scene.id))
-        img_dir = join(scene_dir, 'img')
-        labels_dir = join(scene_dir, 'labels')
+        labels_path = join(scene_dir, '{}-labels.json'.format(scene.id))
 
-        make_dir(img_dir)
-        make_dir(labels_dir)
+        make_dir(scene_dir)
+        images = []
+        annotations = []
+        categories = [{'id': item.id, 'name': item.name}
+                      for item in self.task_config.class_map.get_items()]
 
-        for ind, (chip, window, labels) in enumerate(data):
-            chip_path = join(img_dir, '{}-{}.png'.format(scene.id, ind))
-            label_path = join(labels_dir, '{}-{}.png'.format(scene.id, ind))
+        for im_ind, (chip, window, labels) in enumerate(data):
+            im_id = '{}-{}'.format(scene.id, im_ind)
+            fn = '{}.png'.format(im_id)
+            chip_path = join(scene_dir, fn)
             save_img(chip, chip_path)
-            label_im = labels.get_label_arr(window).astype(np.uint8)
-            save_img(label_im, label_path)
+            images.append({
+                'file_name': fn,
+                'id': im_id,
+                'height': chip.shape[0],
+                'width': chip.shape[1]
+            })
+
+            npboxes = labels.get_npboxes()
+            npboxes = ObjectDetectionLabels.global_to_local(npboxes, window)
+            for box_ind, (box, class_id) in enumerate(
+                    zip(npboxes, labels.get_class_ids())):
+                bbox = [box[1], box[0], box[3]-box[1], box[2]-box[0]]
+                bbox = [int(i) for i in bbox]
+                annotations.append({
+                    'id': '{}-{}'.format(im_id, box_ind),
+                    'image_id': im_id,
+                    'bbox': bbox,
+                    'category_id': int(class_id)
+                })
+
+        coco_dict = {
+            'images': images,
+            'annotations': annotations,
+            'categories': categories
+        }
+        json_to_file(coco_dict, labels_path)
 
         return scene_dir
 
@@ -118,10 +134,10 @@ class ObjectDetectionBackend(Backend):
 
         This writes a zip file for a group of scenes at {chip_uri}/{uuid}.zip
         containing:
-        train-img/{scene_id}-{ind}.png
-        train-labels/{scene_id}-{ind}.png
-        val-img/{scene_id}-{ind}.png
-        val-labels/{scene_id}-{ind}.png
+        train/{scene_id}-{ind}.png
+        train/{scene_id}-labels.json
+        val/{scene_id}-{ind}.png
+        val/{scene_id}-labels.json
 
         Args:
             training_results: dependent on the ml_backend's process_scene_data
@@ -138,15 +154,11 @@ class ObjectDetectionBackend(Backend):
         with zipfile.ZipFile(group_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             def _write_zip(results, split):
                 for scene_dir in results:
-                    scene_paths = glob.glob(join(scene_dir, '**/*.png'))
+                    scene_paths = glob.glob(join(scene_dir, '*'))
                     for p in scene_paths:
-                        zipf.write(p, join(
-                            '{}-{}'.format(
-                                split,
-                                dirname(p).split('/')[-1]),
-                            basename(p)))
+                        zipf.write(p, join(split, basename(p)))
             _write_zip(training_results, 'train')
-            _write_zip(validation_results, 'val')
+            _write_zip(validation_results, 'valid')
 
         upload_or_copy(group_path, group_uri)
 
@@ -169,61 +181,37 @@ class ObjectDetectionBackend(Backend):
                 zipf.extractall(chip_dir)
 
         # Setup data loader.
-        def get_label_path(im_path):
-            return Path(str(im_path.parent)[:-4] + '-labels') / im_path.name
+        train_images = []
+        train_lbl_bbox = []
+        for annotation_path in glob.glob(join(chip_dir, 'train/*.json')):
+            images, lbl_bbox = get_annotations(annotation_path)
+            train_images += images
+            train_lbl_bbox += lbl_bbox
 
-        size = self.task_config.chip_size
-        class_map = self.task_config.class_map
-        classes = ['nodata'] + class_map.get_class_names()
-        num_workers = 0 if self.train_opts.debug else 4
-        data = (SegmentationItemList.from_folder(chip_dir)
-                .split_by_folder(train='train-img', valid='val-img')
-                .label_from_func(get_label_path, classes=classes)
-                .transform(get_transforms(), size=size, tfm_y=True)
-                .databunch(bs=self.train_opts.batch_sz,
-                           num_workers=num_workers))
+        val_images = []
+        val_lbl_bbox = []
+        for annotation_path in glob.glob(join(chip_dir, 'valid/*.json')):
+            images, lbl_bbox = get_annotations(annotation_path)
+            val_images += images
+            val_lbl_bbox += lbl_bbox
+
+        images = train_images + val_images
+        lbl_bbox = train_lbl_bbox + val_lbl_bbox
+
+        img2bbox = dict(zip(images, lbl_bbox))
+        get_y_func = lambda o: img2bbox[o.name]
+        data = ObjectItemList.from_folder(chip_dir)
+        data = data.split_by_folder()
+        data = data.label_from_func(get_y_func)
+        data = data.transform(
+            get_transforms(), size=self.task_config.chip_size, tfm_y=True)
+        data = data.databunch(
+            bs=self.train_opts.batch_sz, collate_fn=bb_pad_collate)
         print(data)
 
         if self.train_opts.debug:
-            make_debug_chips(data, class_map, tmp_dir, train_uri)
-
-        # Setup learner.
-        ignore_idx = 0
-        metrics = [
-            Precision(average='weighted', clas_idx=1, ignore_idx=ignore_idx),
-            Recall(average='weighted', clas_idx=1, ignore_idx=ignore_idx),
-            FBeta(average='weighted', clas_idx=1, beta=1, ignore_idx=ignore_idx)]
-        model_arch = getattr(models, self.train_opts.model_arch)
-        learn = unet_learner(
-            data, model_arch, metrics=metrics, wd=self.train_opts.weight_decay,
-            bottle=True, path=train_dir)
-        learn.unfreeze()
-
-        if self.train_opts.fp16 and torch.cuda.is_available():
-            # This loss_scale works for Resnet 34 and 50. You might need to adjust this
-            # for other models.
-            learn = learn.to_fp16(loss_scale=256)
-
-        # Setup callbacks and train model.
-        model_path = get_local_path(self.backend_opts.model_uri, tmp_dir)
-
-        pretrained_uri = self.backend_opts.pretrained_uri
-        if pretrained_uri:
-            print('Loading weights from pretrained_uri: {}'.format(
-                pretrained_uri))
-            pretrained_path = download_if_needed(pretrained_uri, tmp_dir)
-            learn.load(pretrained_path[:-4])
-
-        callbacks = [
-            TrackEpochCallback(learn),
-            SaveModelCallback(learn, every='epoch'),
-            MyCSVLogger(learn, filename='log'),
-            ExportCallback(learn, model_path),
-            SyncCallback(train_dir, self.backend_opts.train_uri,
-                         self.train_opts.sync_interval)
-        ]
-        learn.fit(self.train_opts.num_epochs, self.train_opts.lr,
-                  callbacks=callbacks)
+            make_debug_chips(
+                data, self.task_config.class_map, tmp_dir, train_uri)
 
         # Since model is exported every epoch, we need some other way to
         # show that training is finished.
@@ -251,19 +239,4 @@ class ObjectDetectionBackend(Backend):
         Return:
             Labels object containing predictions
         """
-        self.load_model(tmp_dir)
-        # TODO get it to work on a whole batch at a time
-        chip = torch.Tensor(chips[0]).permute((2, 0, 1)) / 255.
-        im = Image(chip)
-
-        label_arr = self.inf_learner.predict(im)[1].squeeze().numpy()
-
-        # Return "trivial" instance of SemanticSegmentationLabels that holds a single
-        # window and has ability to get labels for that one window.
-        def label_fn(_window):
-            if _window == windows[0]:
-                return label_arr
-            else:
-                raise ValueError('Trying to get labels for unknown window.')
-
-        return SemanticSegmentationLabels(windows, label_fn)
+        pass

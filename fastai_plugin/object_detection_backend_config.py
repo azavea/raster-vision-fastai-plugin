@@ -39,7 +39,7 @@ class SemanticSegmentationBackendConfigBuilder(SimpleBackendConfigBuilder):
     config_class = ObjectDetectionBackendConfig
 
     def _applicable_tasks(self):
-        return [rv.SEMANTIC_SEGMENTATION]
+        return [rv.OBJECT_DETECTION]
 
     def with_train_options(
             self,
