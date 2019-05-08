@@ -64,4 +64,6 @@ ENV CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 COPY ./fastai_plugin /opt/src/fastai_plugin
 COPY ./examples /opt/src/examples
 
+ENV PYTHONPATH /opt/src/fastai:$PYTHONPATH
+
 CMD ["bash"]
