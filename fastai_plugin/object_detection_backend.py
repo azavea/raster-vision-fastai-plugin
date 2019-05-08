@@ -12,9 +12,9 @@ import numpy as np
 import torch
 from fastai.vision import (
     ObjectItemList, bb_pad_collate, get_transforms, models,
-    Image)
+    Image, get_annotations)
 from fastai.callbacks import SaveModelCallback, CSVLogger, TrackEpochCallback
-from fastai.basic_train import load_learner
+from fastai.basic_train import load_learner, Learner
 
 from rastervision.utils.files import (
     get_local_path, make_dir, upload_or_copy, list_paths,
@@ -26,7 +26,9 @@ from rastervision.data import ObjectDetectionLabels
 
 from fastai_plugin.utils import (
     SyncCallback, ExportCallback, MyCSVLogger, get_last_epoch,
-    Precision, Recall, FBeta, zipdir, get_annotations)
+    Precision, Recall, FBeta, zipdir)
+from fastai_plugin.retinanet import (
+    create_body, RetinaNet, RetinaNetFocalLoss, retina_net_split)
 
 
 def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
@@ -200,18 +202,51 @@ class ObjectDetectionBackend(Backend):
 
         img2bbox = dict(zip(images, lbl_bbox))
         get_y_func = lambda o: img2bbox[o.name]
+        num_workers = 0 if self.train_opts.debug else 4
         data = ObjectItemList.from_folder(chip_dir)
         data = data.split_by_folder()
         data = data.label_from_func(get_y_func)
         data = data.transform(
             get_transforms(), size=self.task_config.chip_size, tfm_y=True)
         data = data.databunch(
-            bs=self.train_opts.batch_sz, collate_fn=bb_pad_collate)
+            bs=self.train_opts.batch_sz, collate_fn=bb_pad_collate,
+            num_workers=num_workers)
         print(data)
 
         if self.train_opts.debug:
             make_debug_chips(
                 data, self.task_config.class_map, tmp_dir, train_uri)
+
+        # Setup callbacks and train model.
+        ratios = [1/2, 1, 2]
+        scales = [1, 2**(-1/3), 2**(-2/3)]
+        model_arch = getattr(models, self.train_opts.model_arch)
+        encoder = create_body(model_arch, cut=-2)
+        model = RetinaNet(encoder, data.c, final_bias=-4)
+        crit = RetinaNetFocalLoss(scales=scales, ratios=ratios)
+        learn = Learner(data, model, loss_func=crit, path=train_dir)
+        learn = learn.split(retina_net_split)
+
+        model_path = get_local_path(self.backend_opts.model_uri, tmp_dir)
+
+        pretrained_uri = self.backend_opts.pretrained_uri
+        if pretrained_uri:
+            print('Loading weights from pretrained_uri: {}'.format(
+                pretrained_uri))
+            pretrained_path = download_if_needed(pretrained_uri, tmp_dir)
+            learn.load(pretrained_path[:-4])
+
+        callbacks = [
+            TrackEpochCallback(learn),
+            SaveModelCallback(learn, every='epoch'),
+            MyCSVLogger(learn, filename='log'),
+            ExportCallback(learn, model_path),
+            SyncCallback(train_dir, self.backend_opts.train_uri,
+                         self.train_opts.sync_interval)
+        ]
+        learn.unfreeze()
+        learn.fit(self.train_opts.num_epochs, self.train_opts.lr,
+                  callbacks=callbacks)
 
         # Since model is exported every epoch, we need some other way to
         # show that training is finished.
