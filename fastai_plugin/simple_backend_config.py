@@ -154,11 +154,6 @@ class SimpleBackendConfigBuilder(BackendConfigBuilder):
             raise rv.ConfigError('You must specify the task this backend '
                                  "is for - use 'with_task'.")
 
-        if self.require_task and not isinstance(self.task,
-                                                SemanticSegmentationConfig):
-            raise rv.ConfigError('Task set with with_task must be of type'
-                                 ' SemanticSegmentationConfig, got {}.'.format(
-                                     type(self.task)))
         return True
 
     def _process_task(self):

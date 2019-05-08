@@ -2,7 +2,10 @@ import csv
 import os
 from os.path import join
 import zipfile
+import collections
+import json
 
+from fastai.core import ifnone
 from fastai.callbacks import CSVLogger, Callback
 from fastai.metrics import add_metrics
 from fastai.torch_core import dataclass, torch, Tensor, Optional, warn
@@ -171,3 +174,26 @@ def zipdir(dir, zip_path):
                 ziph.write(join(root, file),
                            join('/'.join(dirs),
                                 os.path.basename(file)))
+
+
+def get_annotations(fname, prefix=None):
+    "Open a COCO style json in `fname` and returns the lists of filenames (with maybe `prefix`) and labelled bboxes."
+    annot_dict = json.load(open(fname))
+    id2images, id2bboxes, id2cats = {}, collections.defaultdict(list), collections.defaultdict(list)
+    classes = {}
+    for o in annot_dict['categories']:
+        classes[o['id']] = o['name']
+    for o in annot_dict['annotations']:
+        bb = o['bbox']
+        id2bboxes[o['image_id']].append([bb[1],bb[0], bb[3]+bb[1], bb[2]+bb[0]])
+        id2cats[o['image_id']].append(classes[o['category_id']])
+    for o in annot_dict['images']:
+        id2images[o['id']] = ifnone(prefix, '') + o['file_name']
+        # Hack to get around not being able to handle images with no bounding
+        # boxes.
+        if o['id'] not in id2bboxes:
+            id2bboxes[o['id']] = [[0, 0, 0, 0]]
+            id2cats[o['id']] = [classes[1]]
+
+    ids = list(id2images.keys())
+    return [id2images[k] for k in ids], [[id2bboxes[k], id2cats[k]] for k in ids]
