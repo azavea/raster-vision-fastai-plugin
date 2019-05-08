@@ -66,4 +66,6 @@ COPY ./examples /opt/src/examples
 
 ENV PYTHONPATH /opt/src/fastai:$PYTHONPATH
 
+RUN conda install -y jupyter=1.0.*
+
 CMD ["bash"]

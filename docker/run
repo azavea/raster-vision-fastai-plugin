@@ -72,8 +72,8 @@ do
         shift
         ;;
         --jupyter)
-        JUPYTER="-v ${REPO_ROOT}/notebooks:/opt/notebooks -p 8888:8888"
-        CMD=(/run_jupyter.sh --ip 0.0.0.0 --port 8888 --no-browser --allow-root --notebook-dir=/opt/notebooks)
+        JUPYTER="-p 8888:8888"
+        CMD=(jupyter notebook --ip 0.0.0.0 --port 8888 --no-browser --allow-root --notebook-dir=/opt/src)
         shift
         ;;
         *) # unknown option
