@@ -1,6 +1,9 @@
 from fastai.vision.models.unet import _get_sfs_idxs, model_sizes, hook_outputs
 from fastai.vision import *
 
+ratios = [1/2, 1, 2]
+scales = [1, 2**(-1/3), 2**(-2/3)]
+
 
 class LateralUpsampleMerge(nn.Module):
     "Merge the features coming from the downsample path (in `hook`) with the upsample path."
