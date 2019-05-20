@@ -52,10 +52,11 @@ RUN conda install -y python=$PYTHON_VERSION
 RUN conda install -y -c pytorch magma-cuda100=2.5 torchvision=0.2
 RUN conda install -y -c fastai fastai=1.0.51
 RUN conda install -y -c conda-forge awscli=1.16.* boto3=1.9.*
+RUN conda install -y jupyter=1.0.*
 RUN conda clean -ya
 
 # RUN pip install rastervision==0.9.0rc1
-RUN pip install git+git://github.com/azavea/raster-vision.git@2a1640203de832b37323b7f7f5c955ef3c89bedc
+RUN pip install git+git://github.com/azavea/raster-vision.git@fac841e50c1bd29483fecd130cf78d1cc9738dc7
 RUN pip install ptvsd==4.2.*
 
 # See https://github.com/mapbox/rasterio/issues/1289
@@ -63,5 +64,7 @@ ENV CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
 COPY ./fastai_plugin /opt/src/fastai_plugin
 COPY ./examples /opt/src/examples
+
+ENV PYTHONPATH /opt/src/fastai:$PYTHONPATH
 
 CMD ["bash"]

@@ -21,9 +21,12 @@ class CowcObjectDetectionExperiments(rv.ExperimentSet):
         """
         test = str_to_bool(test)
         exp_id = 'cowc-object-detection'
-        num_epochs = 5
-        batch_sz = 8
+        num_epochs = 50
+        batch_sz = 16
         debug = False
+        lr = 2e-5
+        model_arch = 'resnet18'
+        sync_interval = 10
         train_scene_ids = ['2_10', '2_11', '2_12', '2_14', '3_11',
                            '3_13', '4_10', '5_10', '6_7', '6_9']
         val_scene_ids = ['2_13', '6_8', '3_10']
@@ -36,12 +39,14 @@ class CowcObjectDetectionExperiments(rv.ExperimentSet):
             train_scene_ids = train_scene_ids[0:1]
             val_scene_ids = val_scene_ids[0:1]
 
+        # XXX set neg_ratio to 0 for testing purposes
+        # since fastai can't handle neg chips afaik.
         task = rv.TaskConfig.builder(rv.OBJECT_DETECTION) \
                             .with_chip_size(300) \
                             .with_classes({'vehicle': (1, 'red')}) \
-                            .with_chip_options(neg_ratio=1.0,
+                            .with_chip_options(neg_ratio=0.0,
                                                ioa_thresh=0.8) \
-                            .with_predict_options(merge_thresh=0.1,
+                            .with_predict_options(merge_thresh=0.3,
                                                   score_thresh=0.5) \
                             .build()
 
@@ -49,9 +54,9 @@ class CowcObjectDetectionExperiments(rv.ExperimentSet):
             'batch_sz': batch_sz,
             'num_epochs': num_epochs,
             'debug': debug,
-            'lr': 1e-4,
-            'sync_interval': 10,
-            'model_arch': 'resnet18'
+            'lr': lr,
+            'sync_interval': sync_interval,
+            'model_arch': model_arch
         }
         backend = rv.BackendConfig.builder(FASTAI_OBJECT_DETECTION) \
                                   .with_task(task) \
