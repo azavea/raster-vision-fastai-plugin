@@ -6,6 +6,7 @@ import os
 import rasterio
 from shapely.strtree import STRtree
 from shapely.geometry import shape
+import numpy as np
 
 from rastervision.core import Box
 from rastervision.data import RasterioCRSTransformer, GeoJSONVectorSource
@@ -79,21 +80,22 @@ def save_image_crop(image_uri, crop_uri, label_uri=None, size=600,
                     w = w.rasterio_format()
                     im = im_dataset.read(window=w)
 
-                    with tempfile.TemporaryDirectory() as tmp_dir:
-                        crop_path = get_local_path(crop_uri, tmp_dir)
-                        make_dir(crop_path, use_dirname=True)
+                    if np.mean(np.sum(im, axis=2).ravel() == 0) < 0.5:
+                        with tempfile.TemporaryDirectory() as tmp_dir:
+                            crop_path = get_local_path(crop_uri, tmp_dir)
+                            make_dir(crop_path, use_dirname=True)
 
-                        meta = im_dataset.meta
-                        meta['width'], meta['height'] = size, size
-                        meta['transform'] = rasterio.windows.transform(
-                            w, im_dataset.transform)
+                            meta = im_dataset.meta
+                            meta['width'], meta['height'] = size, size
+                            meta['transform'] = rasterio.windows.transform(
+                                w, im_dataset.transform)
 
-                        with rasterio.open(crop_path, 'w', **meta) as dst:
-                            dst.colorinterp = im_dataset.colorinterp
-                            dst.write(im)
+                            with rasterio.open(crop_path, 'w', **meta) as dst:
+                                dst.colorinterp = im_dataset.colorinterp
+                                dst.write(im)
 
-                        upload_or_copy(crop_path, crop_uri)
-                    break
+                            upload_or_copy(crop_path, crop_uri)
+                        break
 
             if not use_window:
                 raise ValueError('Could not find a good crop.')
