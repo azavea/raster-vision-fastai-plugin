@@ -30,11 +30,14 @@ from fastai_plugin.utils import (
 
 def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
     # TODO get rid of white frame
-    # use grey for nodata
-
-    colors = [class_map.get_by_id(i).color
-              for i in range(1, len(class_map) + 1)]
-    colors = ['grey'] + colors
+    if 0 in class_map.get_keys():
+        colors = [class_map.get_by_id(i).color
+                  for i in range(len(class_map))]
+    else:
+        colors = [class_map.get_by_id(i).color
+                  for i in range(1, len(class_map) + 1)]
+        # use grey for nodata
+        colors = ['grey'] + colors
     colors = [color_to_triple(c) for c in colors]
     colors = [tuple([x / 255 for x in c]) for c in colors]
     cmap = matplotlib.colors.ListedColormap(colors)
@@ -106,9 +109,10 @@ class SemanticSegmentationBackend(Backend):
         for ind, (chip, window, labels) in enumerate(data):
             chip_path = join(img_dir, '{}-{}.png'.format(scene.id, ind))
             label_path = join(labels_dir, '{}-{}.png'.format(scene.id, ind))
-            save_img(chip, chip_path)
+
             label_im = labels.get_label_arr(window).astype(np.uint8)
             save_img(label_im, label_path)
+            save_img(chip, chip_path)
 
         return scene_dir
 
@@ -174,7 +178,9 @@ class SemanticSegmentationBackend(Backend):
 
         size = self.task_config.chip_size
         class_map = self.task_config.class_map
-        classes = ['nodata'] + class_map.get_class_names()
+        classes = class_map.get_class_names()
+        if 0 not in class_map.get_keys():
+            classes = ['nodata'] + classes
         num_workers = 0 if self.train_opts.debug else 4
         data = (SegmentationItemList.from_folder(chip_dir)
                 .split_by_folder(train='train-img', valid='val-img')

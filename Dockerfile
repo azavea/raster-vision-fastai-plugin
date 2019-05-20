@@ -56,7 +56,7 @@ RUN conda install -y jupyter=1.0.*
 RUN conda clean -ya
 
 # RUN pip install rastervision==0.9.0rc1
-RUN pip install git+git://github.com/azavea/raster-vision.git@fac841e50c1bd29483fecd130cf78d1cc9738dc7
+RUN pip install git+git://github.com/azavea/raster-vision.git@d23cc18d805f1e0bce29c6595f113eff466a04f6
 RUN pip install ptvsd==4.2.*
 
 # See https://github.com/mapbox/rasterio/issues/1289
