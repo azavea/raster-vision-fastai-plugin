@@ -228,8 +228,17 @@ class SemanticSegmentationBackend(Backend):
             SyncCallback(train_dir, self.backend_opts.train_uri,
                          self.train_opts.sync_interval)
         ]
-        learn.fit(self.train_opts.num_epochs, self.train_opts.lr,
-                  callbacks=callbacks)
+
+        lr = self.train_opts.lr
+        num_epochs = self.train_opts.num_epochs
+        if self.train_opts.one_cycle:
+            if lr is None:
+                learn.lr_find()
+                lr = learn.recorder.min_grad_lr
+                print('lr_find() found lr: {}'.format(lr))
+            learn.fit_one_cycle(num_epochs, lr, callbacks=callbacks)
+        else:
+            learn.fit(num_epochs, lr, callbacks=callbacks)
 
         # Since model is exported every epoch, we need some other way to
         # show that training is finished.
