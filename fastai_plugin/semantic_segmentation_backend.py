@@ -183,7 +183,7 @@ class SemanticSegmentationBackend(Backend):
             sample_dir_uri = join(chip_dir, sample_dir)
             make_dir(sample_dir_uri)
             for s in sample_images:
-                upload_or_copy(join(all_uri, s), join(sample_dir, s))
+                upload_or_copy(join(all_uri, s), join(sample_dir_uri, s))
             return sample_dir
             
         for i in ('labels', 'img'):
@@ -220,6 +220,8 @@ class SemanticSegmentationBackend(Backend):
             classes = ['nodata'] + classes
         num_workers = 0 if self.train_opts.debug else 4
         
+        import pdb
+        pdb.set_trace()
         if self.train_opts.train_proportion >= 1:
             train_img_dir = 'train-img'
         else:
@@ -232,7 +234,7 @@ class SemanticSegmentationBackend(Backend):
                 .databunch(bs=self.train_opts.batch_sz,
                            num_workers=num_workers))
         print(data)
-
+    
         if self.train_opts.debug:
             make_debug_chips(data, class_map, tmp_dir, train_uri)
 
