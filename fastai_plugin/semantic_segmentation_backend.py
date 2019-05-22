@@ -220,8 +220,6 @@ class SemanticSegmentationBackend(Backend):
             classes = ['nodata'] + classes
         num_workers = 0 if self.train_opts.debug else 4
         
-        import pdb
-        pdb.set_trace()
         if self.train_opts.train_proportion >= 1:
             train_img_dir = 'train-img'
         else:
