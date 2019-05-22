@@ -12,19 +12,19 @@ import numpy as np
 import torch
 from fastai.vision import (
     SegmentationItemList, get_transforms, models, unet_learner, Image)
-from fastai.callbacks import SaveModelCallback, CSVLogger, TrackEpochCallback
+from fastai.callbacks import CSVLogger, TrackEpochCallback
 from fastai.basic_train import load_learner
 
 from rastervision.utils.files import (
-        get_local_path, make_dir, upload_or_copy, list_paths,
-        download_if_needed, sync_from_dir, sync_to_dir, str_to_file)
+    get_local_path, make_dir, upload_or_copy, list_paths,
+    download_if_needed, sync_from_dir, sync_to_dir, str_to_file)
 from rastervision.utils.misc import save_img
 from rastervision.backend import Backend
 from rastervision.data.label import SemanticSegmentationLabels
 from rastervision.data.label_source.utils import color_to_triple
 
 from fastai_plugin.utils import (
-    SyncCallback, ExportCallback, MyCSVLogger, get_last_epoch,
+    SyncCallback, MySaveModelCallback, ExportCallback, MyCSVLogger,
     Precision, Recall, FBeta, zipdir)
 
 
@@ -220,9 +220,11 @@ class SemanticSegmentationBackend(Backend):
             pretrained_path = download_if_needed(pretrained_uri, tmp_dir)
             learn.load(pretrained_path[:-4])
 
+        # Save every epoch so that resume functionality provided by
+        # TrackEpochCallback will work.
         callbacks = [
             TrackEpochCallback(learn),
-            SaveModelCallback(learn, every='epoch'),
+            MySaveModelCallback(learn, every='epoch'),
             MyCSVLogger(learn, filename='log'),
             ExportCallback(learn, model_path),
             SyncCallback(train_dir, self.backend_opts.train_uri,
@@ -233,7 +235,8 @@ class SemanticSegmentationBackend(Backend):
         num_epochs = self.train_opts.num_epochs
         if self.train_opts.one_cycle:
             if lr is None:
-                learn.lr_find()
+                learn.lr_find(num_it=50)
+                learn.recorder.plot(suggestion=True)
                 lr = learn.recorder.min_grad_lr
                 print('lr_find() found lr: {}'.format(lr))
             learn.fit_one_cycle(num_epochs, lr, callbacks=callbacks)
