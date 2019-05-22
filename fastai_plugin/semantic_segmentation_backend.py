@@ -235,8 +235,8 @@ class SemanticSegmentationBackend(Backend):
         num_epochs = self.train_opts.num_epochs
         if self.train_opts.one_cycle:
             if lr is None:
-                learn.lr_find(num_it=50)
-                learn.recorder.plot(suggestion=True)
+                learn.lr_find()
+                learn.recorder.plot(suggestion=True, return_fig=True)
                 lr = learn.recorder.min_grad_lr
                 print('lr_find() found lr: {}'.format(lr))
             learn.fit_one_cycle(num_epochs, lr, callbacks=callbacks)
