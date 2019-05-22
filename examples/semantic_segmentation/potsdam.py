@@ -139,6 +139,22 @@ class PotsdamSemanticSegmentation(rv.ExperimentSet):
         }
         return self.get_exp(exp_id, config, raw_uri, processed_uri, root_uri,
                             test)
+    
+    def exp_half_train_data(self, raw_uri, processed_uri, root_uri, test=False):
+        # This can be removed, I just have it in here in order to easily test the 
+        # train proportion config parameter
+        exp_id = 'resnet18-half_train_data'
+        config = {
+            'batch_sz': 8,
+            'num_epochs': 5,
+            'debug': False,
+            'lr': 1e-4,
+            'sync_interval': 10,
+            'model_arch': 'resnet18',
+            'train_proportion': 0.5
+        }
+        return self.get_exp(exp_id, config, raw_uri, processed_uri, root_uri,
+                            test)
 
 
 if __name__ == '__main__':
