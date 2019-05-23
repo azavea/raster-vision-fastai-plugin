@@ -220,7 +220,9 @@ class SemanticSegmentationBackend(Backend):
             classes = ['nodata'] + classes
         num_workers = 0 if self.train_opts.debug else 4
         
-        if self.train_opts.train_proportion >= 1:
+        if self.train_opts.train_proportion > 1 or self.train_opts.train_proportion < 0:
+            raise Exception('Value for "train_proportion" must be between 0 and 1, got {}.'.format(self.train_opts.train_proportion)) 
+        if self.train_opts.train_proportion == 1:
             train_img_dir = 'train-img'
         else:
             train_img_dir = self.subset_training_data(chip_dir)
