@@ -1,14 +1,17 @@
 import csv
 import os
 from os.path import join
+import os
 import zipfile
 import collections
 import json
+from typing import Any
 
 from fastai.core import ifnone
-from fastai.callbacks import CSVLogger, Callback
+from fastai.callbacks import CSVLogger, Callback, SaveModelCallback, TrackerCallback
 from fastai.metrics import add_metrics
 from fastai.torch_core import dataclass, torch, Tensor, Optional, warn
+from fastai.basic_train import Learner
 
 from rastervision.utils.files import (sync_to_dir)
 
@@ -21,16 +24,38 @@ class SyncCallback(Callback):
 
     def on_epoch_end(self, **kwargs):
         if (kwargs['epoch'] + 1) % self.sync_interval == 0:
-            sync_to_dir(self.from_dir, self.to_uri)
+            sync_to_dir(self.from_dir, self.to_uri, delete=True)
 
 
-class ExportCallback(Callback):
-    def __init__(self, learn, model_path):
-        self.learn = learn
+class ExportCallback(TrackerCallback):
+    "A `TrackerCallback` that exports the model when monitored quantity is best."
+    def __init__(self, learn:Learner, model_path:str, monitor:str='valid_loss', mode:str='auto'):
         self.model_path = model_path
+        super().__init__(learn, monitor=monitor, mode=mode)
 
-    def on_epoch_end(self, **kwargs):
-        self.learn.export(self.model_path)
+    def on_epoch_end(self, epoch:int, **kwargs:Any)->None:
+        current = self.get_monitor_value()
+        if current is not None and self.operator(current, self.best):
+            print(f'Better model found at epoch {epoch} with {self.monitor} value: {current}.')
+            self.best = current
+            print(f'Exporting to {self.model_path}')
+
+
+class MySaveModelCallback(SaveModelCallback):
+    """Modified to delete the previous model that was saved."""
+    def on_epoch_end(self, epoch:int, **kwargs:Any)->None:
+        "Compare the value monitored to its best score and maybe save the model."
+        if self.every=="epoch":
+            self.learn.save(f'{self.name}_{epoch}')
+            prev_model_path = self.learn.path/self.learn.model_dir/f'{self.name}_{epoch-1}.pth'
+            if os.path.isfile(prev_model_path):
+                os.remove(prev_model_path)
+        else: #every="improvement"
+            current = self.get_monitor_value()
+            if current is not None and self.operator(current, self.best):
+                print(f'Better model found at epoch {epoch} with {self.monitor} value: {current}.')
+                self.best = current
+                self.learn.save(f'{self.name}')
 
 
 class MyCSVLogger(CSVLogger):
@@ -55,17 +80,6 @@ class MyCSVLogger(CSVLogger):
             epoch, smooth_loss, last_metrics, **kwargs)
         self.file.flush()
         return out
-
-
-def get_last_epoch(log_path):
-    with open(log_path, 'r') as f:
-        num_rows = 0
-        for row in csv.reader(f):
-            num_rows += 1
-        if num_rows >= 2:
-            return int(row[0])
-        return 0
-
 
 @dataclass
 class ConfusionMatrix(Callback):

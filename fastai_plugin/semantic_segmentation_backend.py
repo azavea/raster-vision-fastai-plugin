@@ -12,29 +12,32 @@ import numpy as np
 import torch
 from fastai.vision import (
     SegmentationItemList, get_transforms, models, unet_learner, Image)
-from fastai.callbacks import SaveModelCallback, CSVLogger, TrackEpochCallback
+from fastai.callbacks import CSVLogger, TrackEpochCallback
 from fastai.basic_train import load_learner
 
 from rastervision.utils.files import (
-        get_local_path, make_dir, upload_or_copy, list_paths,
-        download_if_needed, sync_from_dir, sync_to_dir, str_to_file)
+    get_local_path, make_dir, upload_or_copy, list_paths,
+    download_if_needed, sync_from_dir, sync_to_dir, str_to_file)
 from rastervision.utils.misc import save_img
 from rastervision.backend import Backend
 from rastervision.data.label import SemanticSegmentationLabels
 from rastervision.data.label_source.utils import color_to_triple
 
 from fastai_plugin.utils import (
-    SyncCallback, ExportCallback, MyCSVLogger, get_last_epoch,
+    SyncCallback, MySaveModelCallback, ExportCallback, MyCSVLogger,
     Precision, Recall, FBeta, zipdir)
 
 
 def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
     # TODO get rid of white frame
-    # use grey for nodata
-
-    colors = [class_map.get_by_id(i).color
-              for i in range(1, len(class_map) + 1)]
-    colors = ['grey'] + colors
+    if 0 in class_map.get_keys():
+        colors = [class_map.get_by_id(i).color
+                  for i in range(len(class_map))]
+    else:
+        colors = [class_map.get_by_id(i).color
+                  for i in range(1, len(class_map) + 1)]
+        # use grey for nodata
+        colors = ['grey'] + colors
     colors = [color_to_triple(c) for c in colors]
     colors = [tuple([x / 255 for x in c]) for c in colors]
     cmap = matplotlib.colors.ListedColormap(colors)
@@ -106,9 +109,10 @@ class SemanticSegmentationBackend(Backend):
         for ind, (chip, window, labels) in enumerate(data):
             chip_path = join(img_dir, '{}-{}.png'.format(scene.id, ind))
             label_path = join(labels_dir, '{}-{}.png'.format(scene.id, ind))
-            save_img(chip, chip_path)
+
             label_im = labels.get_label_arr(window).astype(np.uint8)
             save_img(label_im, label_path)
+            save_img(chip, chip_path)
 
         return scene_dir
 
@@ -174,7 +178,9 @@ class SemanticSegmentationBackend(Backend):
 
         size = self.task_config.chip_size
         class_map = self.task_config.class_map
-        classes = ['nodata'] + class_map.get_class_names()
+        classes = class_map.get_class_names()
+        if 0 not in class_map.get_keys():
+            classes = ['nodata'] + classes
         num_workers = 0 if self.train_opts.debug else 4
         data = (SegmentationItemList.from_folder(chip_dir)
                 .split_by_folder(train='train-img', valid='val-img')
@@ -214,16 +220,28 @@ class SemanticSegmentationBackend(Backend):
             pretrained_path = download_if_needed(pretrained_uri, tmp_dir)
             learn.load(pretrained_path[:-4])
 
+        # Save every epoch so that resume functionality provided by
+        # TrackEpochCallback will work.
         callbacks = [
             TrackEpochCallback(learn),
-            SaveModelCallback(learn, every='epoch'),
+            MySaveModelCallback(learn, every='epoch'),
             MyCSVLogger(learn, filename='log'),
-            ExportCallback(learn, model_path),
+            ExportCallback(learn, model_path, monitor='f_beta'),
             SyncCallback(train_dir, self.backend_opts.train_uri,
                          self.train_opts.sync_interval)
         ]
-        learn.fit(self.train_opts.num_epochs, self.train_opts.lr,
-                  callbacks=callbacks)
+
+        lr = self.train_opts.lr
+        num_epochs = self.train_opts.num_epochs
+        if self.train_opts.one_cycle:
+            if lr is None:
+                learn.lr_find()
+                learn.recorder.plot(suggestion=True, return_fig=True)
+                lr = learn.recorder.min_grad_lr
+                print('lr_find() found lr: {}'.format(lr))
+            learn.fit_one_cycle(num_epochs, lr, callbacks=callbacks)
+        else:
+            learn.fit(num_epochs, lr, callbacks=callbacks)
 
         # Since model is exported every epoch, we need some other way to
         # show that training is finished.
