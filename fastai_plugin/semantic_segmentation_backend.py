@@ -226,7 +226,7 @@ class SemanticSegmentationBackend(Backend):
             TrackEpochCallback(learn),
             MySaveModelCallback(learn, every='epoch'),
             MyCSVLogger(learn, filename='log'),
-            ExportCallback(learn, model_path),
+            ExportCallback(learn, model_path, monitor='f_beta'),
             SyncCallback(train_dir, self.backend_opts.train_uri,
                          self.train_opts.sync_interval)
         ]
