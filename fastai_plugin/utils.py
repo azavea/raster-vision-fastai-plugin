@@ -35,10 +35,13 @@ class ExportCallback(TrackerCallback):
 
     def on_epoch_end(self, epoch:int, **kwargs:Any)->None:
         current = self.get_monitor_value()
-        if current is not None and self.operator(current, self.best):
+
+        if (epoch == 0 or
+                (current is not None and self.operator(current, self.best))):
             print(f'Better model found at epoch {epoch} with {self.monitor} value: {current}.')
             self.best = current
             print(f'Exporting to {self.model_path}')
+            self.learn.export(self.model_path)
 
 
 class MySaveModelCallback(SaveModelCallback):
