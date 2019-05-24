@@ -243,7 +243,8 @@ class SemanticSegmentationBackend(Backend):
         data = (SegmentationItemList.from_folder(chip_dir)
                 .split_by_folder(train=train_img_dir, valid='val-img')
                 .label_from_func(get_label_path, classes=classes)
-                .transform(get_transforms(), size=size, tfm_y=True)
+                .transform(get_transforms(flip_vert=self.train_opts.flip_vert),
+                           size=size, tfm_y=True)
                 .databunch(bs=self.train_opts.batch_sz,
                            num_workers=num_workers))
         print(data)
