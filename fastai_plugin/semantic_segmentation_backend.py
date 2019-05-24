@@ -328,11 +328,9 @@ class SemanticSegmentationBackend(Backend):
             Labels object containing predictions
         """
         self.load_model(tmp_dir)
-        # TODO get it to work on a whole batch at a time
-        chip = torch.Tensor(chips[0]).permute((2, 0, 1)) / 255.
-        im = Image(chip)
-
-        label_arr = self.inf_learner.predict(im)[1].squeeze().numpy()
+        dev = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+        chip = torch.Tensor(chips[0]).to(dev).permute((2, 0, 1)).unsqueeze(0) / 255.
+        label_arr = self.inf_learner.model(chip)[0].squeeze().argmax(dim=0).detach().cpu().numpy()
 
         # Return "trivial" instance of SemanticSegmentationLabels that holds a single
         # window and has ability to get labels for that one window.
