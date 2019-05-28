@@ -139,10 +139,9 @@ class PotsdamSemanticSegmentation(rv.ExperimentSet):
         }
         return self.get_exp(exp_id, config, raw_uri, processed_uri, root_uri,
                             test)
-    
-    def exp_half_train_data(self, raw_uri, processed_uri, root_uri, test=False):
-        # This can be removed, I just have it in here in order to easily test the 
-        # train proportion config parameter
+
+    # Example of experiment using half of the training chips
+    def exp_subset_half_train_data(self, raw_uri, processed_uri, root_uri, test=False):
         exp_id = 'resnet18-half_train_data'
         config = {
             'batch_sz': 8,
@@ -151,7 +150,22 @@ class PotsdamSemanticSegmentation(rv.ExperimentSet):
             'lr': 1e-4,
             'sync_interval': 10,
             'model_arch': 'resnet18',
-            'train_proportion': 0.5
+            'train_prop': 0.5
+        }
+        return self.get_exp(exp_id, config, raw_uri, processed_uri, root_uri,
+                            test)
+
+    # Example of experiment using exactlty 5,000 chips
+    def exp_subset_5k_chips(self, raw_uri, processed_uri, root_uri, test=False):
+        exp_id = 'resnet18-5k_train_chips'
+        config = {
+            'batch_sz': 8,
+            'num_epochs': 5,
+            'debug': False,
+            'lr': 1e-4,
+            'sync_interval': 10,
+            'model_arch': 'resnet18',
+            'train_count': 5000
         }
         return self.get_exp(exp_id, config, raw_uri, processed_uri, root_uri,
                             test)

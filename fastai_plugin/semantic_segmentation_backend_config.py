@@ -14,7 +14,8 @@ class TrainOptions():
     def __init__(self, batch_sz=None, weight_decay=None, lr=None,
                  one_cycle=None,
                  num_epochs=None, model_arch=None, fp16=None,
-                 sync_interval=None, debug=None, train_proportion=None):
+                 sync_interval=None, debug=None, train_prop=None,
+                 train_count=None):
         self.batch_sz = batch_sz
         self.weight_decay = weight_decay
         self.lr = lr
@@ -24,7 +25,8 @@ class TrainOptions():
         self.fp16 = fp16
         self.sync_interval = sync_interval
         self.debug = debug
-        self.train_proportion = train_proportion
+        self.train_prop = train_prop
+        self.train_count = train_count
 
     def __setattr__(self, name, value):
         if name in ['batch_sz', 'num_epochs', 'sync_interval']:
@@ -55,13 +57,15 @@ class SemanticSegmentationBackendConfigBuilder(SimpleBackendConfigBuilder):
             fp16=False,
             sync_interval=1,
             debug=False,
-            train_proportion=1.0):
+            train_prop=1.0,
+            train_count=None):
         b = deepcopy(self)
         b.train_opts = TrainOptions(
             batch_sz=batch_sz, weight_decay=weight_decay, lr=lr,
             one_cycle=one_cycle,
             num_epochs=num_epochs, model_arch=model_arch, fp16=fp16,
-            sync_interval=sync_interval, debug=debug, train_proportion=train_proportion)
+            sync_interval=sync_interval, debug=debug, train_prop=train_prop,
+            train_count=train_count)
         return b
 
     def with_pretrained_uri(self, pretrained_uri):
