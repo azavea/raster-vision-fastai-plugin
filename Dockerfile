@@ -55,7 +55,7 @@ RUN conda install -y -c conda-forge awscli=1.16.* boto3=1.9.*
 RUN conda install -y jupyter=1.0.*
 RUN conda clean -ya
 
-RUN pip install git+git://github.com/azavea/raster-vision.git@3b96214f9a4ce38e08ac78d0a0113353ad02ebf0
+RUN pip install git+git://github.com/azavea/raster-vision.git@99a9aaef9dd2040ee1feffe450a5d1e74f325674
 RUN pip install ptvsd==4.2.*
 
 # See https://github.com/mapbox/rasterio/issues/1289
