@@ -1,3 +1,4 @@
+import os
 from os.path import join, basename, dirname, isfile
 import uuid
 import zipfile
@@ -154,6 +155,60 @@ class SemanticSegmentationBackend(Backend):
 
         upload_or_copy(group_path, group_uri)
 
+    def subset_training_data(self, chip_dir):
+        """ Specify a subset of all the training chips that have been created
+
+        This creates uses the train_opts 'train_count' or 'train_prop' parameter to
+            subset a number (n) of the training chips. The function prioritizes
+            'train_count' and falls back to 'train_prop' if 'train_count' is not set. 
+            It creates two new directories 'train-{n}-img' and 'train-{n}-labels' with
+            subsets of the chips that the dataloader can read from.
+
+        Args:
+            chip_dir (str): path to the chip directory
+
+        Returns:
+            (str) name of the train subset image directory (e.g. 'train-{n}-img')
+        """
+        
+
+        all_train_uri = join(chip_dir, 'train-img')
+        all_train = list(filter(lambda x: x.endswith(
+            '.png'), os.listdir(all_train_uri)))
+        all_train.sort()
+
+        count = self.train_opts.train_count
+        if count:
+            if count > len(all_train):
+                raise Exception('Value for "train_count" ({}) must be less '
+                                'than or equal to the total number of chips ({}) '
+                                'in the train set.'.format(count, len(all_train)))
+            sample_size = int(count)
+        else:
+            prop = self.train_opts.train_prop
+            if prop > 1 or prop < 0:
+                raise Exception('Value for "train_prop" must be between 0 and 1, got {}.'.format(prop))
+            if prop == 1:
+                return 'train-img'
+            sample_size = round(prop * len(all_train))
+        
+        random.seed(100)
+        sample_images = random.sample(all_train, sample_size)
+
+        def _copy_train_chips(img_or_labels):
+            all_uri = join(chip_dir, 'train-{}'.format(img_or_labels))
+            sample_dir = 'train-{}-{}'.format(str(sample_size), img_or_labels)
+            sample_dir_uri = join(chip_dir, sample_dir)
+            make_dir(sample_dir_uri)
+            for s in sample_images:
+                upload_or_copy(join(all_uri, s), join(sample_dir_uri, s))
+            return sample_dir
+
+        for i in ('labels', 'img'):
+            d = _copy_train_chips(i)
+
+        return d
+
     def train(self, tmp_dir):
         """Train a model."""
         self.print_options()
@@ -182,8 +237,11 @@ class SemanticSegmentationBackend(Backend):
         if 0 not in class_map.get_keys():
             classes = ['nodata'] + classes
         num_workers = 0 if self.train_opts.debug else 4
+
+        train_img_dir = self.subset_training_data(chip_dir)
+
         data = (SegmentationItemList.from_folder(chip_dir)
-                .split_by_folder(train='train-img', valid='val-img')
+                .split_by_folder(train=train_img_dir, valid='val-img')
                 .label_from_func(get_label_path, classes=classes)
                 .transform(get_transforms(), size=size, tfm_y=True)
                 .databunch(bs=self.train_opts.batch_sz,
