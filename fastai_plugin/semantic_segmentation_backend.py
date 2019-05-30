@@ -29,6 +29,15 @@ from fastai_plugin.utils import (
     Precision, Recall, FBeta, zipdir)
 
 
+# Deprecated and just here so old models can be unpickled.
+def semseg_acc(input, target):
+    # Note: custom metrics need to be at global level for learner to be saved.
+    target = target.squeeze(1)
+
+    mask = target != nodata_id
+    return (input.argmax(dim=1)[mask]==target[mask]).float().mean()
+
+
 def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
     # TODO get rid of white frame
     if 0 in class_map.get_keys():
@@ -277,7 +286,9 @@ class SemanticSegmentationBackend(Backend):
             print('Loading weights from pretrained_uri: {}'.format(
                 pretrained_uri))
             pretrained_path = download_if_needed(pretrained_uri, tmp_dir)
-            learn.load(pretrained_path[:-4])
+            learn.model.load_state_dict(
+                torch.load(pretrained_path, map_location=learn.data.device),
+                strict=False)
 
         # Save every epoch so that resume functionality provided by
         # TrackEpochCallback will work.
