@@ -15,6 +15,7 @@ from fastai.vision import (
     SegmentationItemList, get_transforms, models, unet_learner, Image)
 from fastai.callbacks import CSVLogger, TrackEpochCallback
 from fastai.basic_train import load_learner
+from fastai.basic_data import DatasetType
 
 from rastervision.utils.files import (
     get_local_path, make_dir, upload_or_copy, list_paths,
@@ -169,7 +170,7 @@ class SemanticSegmentationBackend(Backend):
 
         This creates uses the train_opts 'train_count' or 'train_prop' parameter to
             subset a number (n) of the training chips. The function prioritizes
-            'train_count' and falls back to 'train_prop' if 'train_count' is not set. 
+            'train_count' and falls back to 'train_prop' if 'train_count' is not set.
             It creates two new directories 'train-{n}-img' and 'train-{n}-labels' with
             subsets of the chips that the dataloader can read from.
 
@@ -179,7 +180,7 @@ class SemanticSegmentationBackend(Backend):
         Returns:
             (str) name of the train subset image directory (e.g. 'train-{n}-img')
         """
-        
+
 
         all_train_uri = join(chip_dir, 'train-img')
         all_train = list(filter(lambda x: x.endswith(
@@ -200,7 +201,7 @@ class SemanticSegmentationBackend(Backend):
             if prop == 1:
                 return 'train-img'
             sample_size = round(prop * len(all_train))
-        
+
         random.seed(100)
         sample_images = random.sample(all_train, sample_size)
 
@@ -345,7 +346,13 @@ class SemanticSegmentationBackend(Backend):
         im = Image(chip)
         self.inf_learner.data.single_ds.tfmargs['size'] = self.task_config.predict_chip_size
         self.inf_learner.data.single_ds.tfmargs_y['size'] = self.task_config.predict_chip_size
-        label_arr = self.inf_learner.predict(im)[1].squeeze().numpy()
+
+        if self.train_opts.tta:
+            with self.inf_learner.data.single_ds.set_item(im):
+                label_arr = (self.inf_learner.TTA(ds_type=DatasetType.Single)[0]
+                                 .squeeze().argmax(dim=0).numpy())
+        else:
+            label_arr = self.inf_learner.predict(im)[1].squeeze().numpy()
 
         # Return "trivial" instance of SemanticSegmentationLabels that holds a single
         # window and has ability to get labels for that one window.
