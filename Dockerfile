@@ -50,20 +50,27 @@ RUN curl -o ~/miniconda.sh -O  https://repo.continuum.io/miniconda/Miniconda3-la
 ENV PATH /opt/conda/bin:$PATH
 RUN conda install -y python=$PYTHON_VERSION
 RUN conda install -y -c pytorch magma-cuda100=2.5 torchvision=0.2
-RUN conda install -y -c fastai fastai=1.0.51
 RUN conda install -y -c conda-forge awscli=1.16.* boto3=1.9.*
 RUN conda install -y jupyter=1.0.*
 RUN conda clean -ya
 
-RUN pip install git+git://github.com/azavea/raster-vision.git@99a9aaef9dd2040ee1feffe450a5d1e74f325674
+ARG RV_COMMIT=99a9aaef9dd2040ee1feffe450a5d1e74f325674
+RUN pip install git+git://github.com/azavea/raster-vision.git@$RV_COMMIT
 RUN pip install ptvsd==4.2.*
 
 # See https://github.com/mapbox/rasterio/issues/1289
 ENV CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
+ARG FASTAI_COMMIT=39b3a3f85489b250c286d22dde4bfe1c52730c60
+RUN cd /tmp && \
+    wget https://github.com/azavea/fastai/archive/$FASTAI_COMMIT.zip && \
+    unzip $FASTAI_COMMIT.zip && \
+    cd fastai-$FASTAI_COMMIT && \
+    pip install -e ".[dev]"
+
 COPY ./fastai_plugin /opt/src/fastai_plugin
 COPY ./examples /opt/src/examples
 
-ENV PYTHONPATH /opt/src/fastai:$PYTHONPATH
+ENV PYTHONPATH /opt/src/:$PYTHONPATH
 
 CMD ["bash"]
