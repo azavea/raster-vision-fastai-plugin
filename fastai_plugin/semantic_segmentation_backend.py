@@ -16,6 +16,7 @@ from fastai.vision import (
 from fastai.callbacks import CSVLogger, TrackEpochCallback
 from fastai.basic_train import load_learner
 from fastai.basic_data import DatasetType
+from torch.utils.data.sampler import WeightedRandomSampler
 
 from rastervision.utils.files import (
     get_local_path, make_dir, upload_or_copy, list_paths,
@@ -73,6 +74,35 @@ def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
 
     _make_debug_chips('train')
     _make_debug_chips('val')
+
+
+def filter_chip_inds(dataset, class_ids):
+    chip_inds = []
+    for i, (x, y) in enumerate(dataset):
+        match = False
+        for class_id in class_ids:
+            if torch.any(y.data == class_id):
+                match = True
+                break
+        if match:
+            chip_inds.append(i)
+    return chip_inds
+
+
+def get_sample_weights(num_samples, rare_chip_inds, rare_prob):
+    rare_weight = rare_prob / len(rare_chip_inds)
+    common_weight = (1 - rare_prob) / (num_samples - len(rare_chip_inds))
+    weights = torch.full((num_samples,), common_weight)
+    weights[rare_chip_inds] = rare_weight
+    return weights
+
+
+def get_weighted_sampler(dataset, class_ids):
+    chip_inds = filter_chip_inds(dataset, class_ids)
+    print('prop of rare chips before oversampling: ', len(chip_inds) / len(dataset))
+    weights = get_sample_weights(len(dataset), chip_inds, 0.5)
+    sampler = WeightedRandomSampler(weights, len(weights))
+    return sampler
 
 
 class SemanticSegmentationBackend(Backend):
@@ -250,14 +280,22 @@ class SemanticSegmentationBackend(Backend):
 
         train_img_dir = self.subset_training_data(chip_dir)
 
-        data = (SegmentationItemList.from_folder(chip_dir)
-                .split_by_folder(train=train_img_dir, valid='val-img')
-                .label_from_func(get_label_path, classes=classes)
-                .transform(get_transforms(flip_vert=self.train_opts.flip_vert),
-                           size=size, tfm_y=True)
-                .databunch(bs=self.train_opts.batch_sz,
-                           num_workers=num_workers))
-        print(data)
+        def get_data(train_sampler=None):
+            data = (SegmentationItemList.from_folder(chip_dir)
+                    .split_by_folder(train=train_img_dir, valid='val-img')
+                    .label_from_func(get_label_path, classes=classes)
+                    .transform(get_transforms(flip_vert=self.train_opts.flip_vert),
+                               size=size, tfm_y=True)
+                    .databunch(bs=self.train_opts.batch_sz,
+                               num_workers=num_workers,
+                               train_sampler=train_sampler))
+            return data
+
+        data = get_data()
+        if self.train_opts.oversample:
+            rare_class_ids = [1, 2, 4, 6]
+            sampler = get_weighted_sampler(data.train_ds, rare_class_ids)
+            data = get_data(train_sampler=sampler)
 
         if self.train_opts.debug:
             make_debug_chips(data, class_map, tmp_dir, train_uri)
