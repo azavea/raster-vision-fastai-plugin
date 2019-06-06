@@ -66,8 +66,10 @@ RUN cd /tmp && \
     wget https://github.com/azavea/fastai/archive/$FASTAI_COMMIT.zip && \
     unzip $FASTAI_COMMIT.zip && \
     cd fastai-$FASTAI_COMMIT && \
-    pip install -e ".[dev]" && \
-    cd .. && rm $FASTAI_COMMIT.zip && rm -R fastai-$FASTAI_COMMIT
+    pip install . && \
+    cd .. && rm -R fastai-$FASTAI_COMMIT && rm $FASTAI_COMMIT.zip
+
+WORKDIR /opt/src
 
 COPY ./fastai_plugin /opt/src/fastai_plugin
 COPY ./examples /opt/src/examples
