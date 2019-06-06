@@ -102,7 +102,7 @@ def get_sample_weights(num_samples, rare_chip_inds, rare_prob):
 def get_weighted_sampler(dataset, class_ids):
     chip_inds = filter_chip_inds(dataset, class_ids)
     print('prop of rare chips before oversampling: ', len(chip_inds) / len(dataset))
-    weights = get_sample_weights(len(dataset), chip_inds, 0.5)
+    weights = get_sample_weights(len(dataset), chip_inds, 0.8)
     sampler = WeightedRandomSampler(weights, len(weights))
     return sampler
 
@@ -295,6 +295,9 @@ class SemanticSegmentationBackend(Backend):
 
         data = get_data()
         if self.train_opts.oversample:
+            # TODO move this into options. This requires change to way
+            # we read/write protobufs to handle nested dicts.
+            # building, clutter, water, car
             rare_class_ids = [1, 2, 4, 6]
             sampler = get_weighted_sampler(data.train_ds, rare_class_ids)
             data = get_data(train_sampler=sampler)
