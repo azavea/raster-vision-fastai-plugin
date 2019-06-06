@@ -12,10 +12,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from fastai.vision import (
-    SegmentationItemList, get_transforms, models, unet_learner, Image)
+    SegmentationItemList, get_transforms, models, unet_learner, Image,
+    ImageSegment)
 from fastai.callbacks import CSVLogger, TrackEpochCallback
 from fastai.basic_train import load_learner
 from fastai.basic_data import DatasetType
+from fastai.vision.transform import dihedral
 from torch.utils.data.sampler import WeightedRandomSampler
 
 from rastervision.utils.files import (
@@ -386,9 +388,21 @@ class SemanticSegmentationBackend(Backend):
         self.inf_learner.data.single_ds.tfmargs_y['size'] = self.task_config.predict_chip_size
 
         if self.train_opts.tta:
-            with self.inf_learner.data.single_ds.set_item(im):
-                label_arr = (self.inf_learner.TTA(ds_type=DatasetType.Single)[0]
-                                 .squeeze().argmax(dim=0).numpy())
+            probs = []
+            for k in range(8):
+                trans_im = dihedral(Image(chip), k)
+                o = self.inf_learner.predict(trans_im)[2]
+                # https://forums.fast.ai/t/how-best-to-have-get-preds-or-tta-apply-specified-transforms/40731/9
+                o = Image(o)
+                if k == 5:
+                    o = dihedral(o, 6)
+                elif k == 6:
+                    o = dihedral(o, 5)
+                else:
+                    o = dihedral(o, k)
+                probs.append(o.data)
+
+            label_arr = torch.stack(probs).mean(0).argmax(0).numpy()
         else:
             label_arr = self.inf_learner.predict(im)[1].squeeze().numpy()
 
