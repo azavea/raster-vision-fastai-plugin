@@ -91,18 +91,18 @@ def filter_chip_inds(dataset, class_ids):
     return chip_inds
 
 
-def get_sample_weights(num_samples, rare_chip_inds, rare_prob):
-    rare_weight = rare_prob / len(rare_chip_inds)
-    common_weight = (1 - rare_prob) / (num_samples - len(rare_chip_inds))
+def get_sample_weights(num_samples, rare_chip_inds, rare_target_prob):
+    rare_weight = rare_target_prob / len(rare_chip_inds)
+    common_weight = (1 - rare_target_prob) / (num_samples - len(rare_chip_inds))
     weights = torch.full((num_samples,), common_weight)
     weights[rare_chip_inds] = rare_weight
     return weights
 
 
-def get_weighted_sampler(dataset, class_ids):
-    chip_inds = filter_chip_inds(dataset, class_ids)
+def get_weighted_sampler(dataset, rare_class_ids, rare_target_prop):
+    chip_inds = filter_chip_inds(dataset, rare_class_ids)
     print('prop of rare chips before oversampling: ', len(chip_inds) / len(dataset))
-    weights = get_sample_weights(len(dataset), chip_inds, 0.8)
+    weights = get_sample_weights(len(dataset), chip_inds, rare_target_prop)
     sampler = WeightedRandomSampler(weights, len(weights))
     return sampler
 
@@ -294,12 +294,11 @@ class SemanticSegmentationBackend(Backend):
             return data
 
         data = get_data()
-        if self.train_opts.oversample:
-            # TODO move this into options. This requires change to way
-            # we read/write protobufs to handle nested dicts.
-            # building, clutter, water, car
-            rare_class_ids = [1, 2, 4, 6]
-            sampler = get_weighted_sampler(data.train_ds, rare_class_ids)
+        oversample = self.train_opts.oversample
+        if oversample:
+            sampler = get_weighted_sampler(
+                data.train_ds, oversample['rare_class_ids'],
+                oversample['rare_target_prop'])
             data = get_data(train_sampler=sampler)
 
         if self.train_opts.debug:

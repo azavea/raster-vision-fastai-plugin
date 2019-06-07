@@ -64,7 +64,7 @@ class SemanticSegmentationBackendConfigBuilder(SimpleBackendConfigBuilder):
             train_prop=1.0,
             train_count=None,
             tta=False,
-            oversample=False):
+            oversample=None):
         b = deepcopy(self)
         b.train_opts = TrainOptions(
             batch_sz=batch_sz, weight_decay=weight_decay, lr=lr,
