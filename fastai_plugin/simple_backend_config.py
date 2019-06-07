@@ -1,6 +1,7 @@
 from os.path import join
 from copy import deepcopy
 from abc import abstractmethod
+import json
 
 from google.protobuf import struct_pb2
 
@@ -42,12 +43,14 @@ class SimpleBackendConfig(BackendConfig):
         pass
 
     def to_proto(self):
-        custom_config = struct_pb2.Struct()
+        config = {}
         for k, v in self.backend_opts.__dict__.items():
-            custom_config[k] = v
+            config[k] = v
         for k, v in self.train_opts.__dict__.items():
-            custom_config[k] = v
+            config[k] = v
 
+        custom_config = struct_pb2.Struct()
+        custom_config['json'] = json.dumps(config)
         msg = BackendConfigMsg(
             backend_type=self.backend_type,
             custom_config=custom_config)
@@ -138,12 +141,18 @@ class SimpleBackendConfigBuilder(BackendConfigBuilder):
     def from_proto(self, msg):
         b = super().from_proto(msg)
         custom_config = msg.custom_config
+
+        if 'json' in custom_config:
+            config = json.loads(custom_config['json'])
+        else:
+            config = custom_config
+
         for k in self.backend_opts.__dict__.keys():
-            if k in custom_config:
-                setattr(b.backend_opts, k, custom_config[k])
+            if k in config:
+                setattr(b.backend_opts, k, config[k])
         for k in self.train_opts.__dict__.keys():
-            if k in custom_config:
-                setattr(b.train_opts, k, custom_config[k])
+            if k in config:
+                setattr(b.train_opts, k, config[k])
         b.require_task = None
         return b
 
