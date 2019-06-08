@@ -12,9 +12,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from fastai.vision import (
-    SegmentationItemList, get_transforms, models, unet_learner, Image)
+    SegmentationItemList, get_transforms, models, unet_learner, Image,
+    ImageSegment)
 from fastai.callbacks import CSVLogger, TrackEpochCallback
 from fastai.basic_train import load_learner
+from fastai.basic_data import DatasetType
+from fastai.vision.transform import dihedral
+from torch.utils.data.sampler import WeightedRandomSampler
 
 from rastervision.utils.files import (
     get_local_path, make_dir, upload_or_copy, list_paths,
@@ -27,6 +31,15 @@ from rastervision.data.label_source.utils import color_to_triple
 from fastai_plugin.utils import (
     SyncCallback, MySaveModelCallback, ExportCallback, MyCSVLogger,
     Precision, Recall, FBeta, zipdir)
+
+
+# Deprecated and just here so old models can be unpickled.
+def semseg_acc(input, target):
+    # Note: custom metrics need to be at global level for learner to be saved.
+    target = target.squeeze(1)
+
+    mask = target != nodata_id
+    return (input.argmax(dim=1)[mask]==target[mask]).float().mean()
 
 
 def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
@@ -63,6 +76,35 @@ def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
 
     _make_debug_chips('train')
     _make_debug_chips('val')
+
+
+def filter_chip_inds(dataset, class_ids):
+    chip_inds = []
+    for i, (x, y) in enumerate(dataset):
+        match = False
+        for class_id in class_ids:
+            if torch.any(y.data == class_id):
+                match = True
+                break
+        if match:
+            chip_inds.append(i)
+    return chip_inds
+
+
+def get_sample_weights(num_samples, rare_chip_inds, rare_target_prob):
+    rare_weight = rare_target_prob / len(rare_chip_inds)
+    common_weight = (1 - rare_target_prob) / (num_samples - len(rare_chip_inds))
+    weights = torch.full((num_samples,), common_weight)
+    weights[rare_chip_inds] = rare_weight
+    return weights
+
+
+def get_weighted_sampler(dataset, rare_class_ids, rare_target_prop):
+    chip_inds = filter_chip_inds(dataset, rare_class_ids)
+    print('prop of rare chips before oversampling: ', len(chip_inds) / len(dataset))
+    weights = get_sample_weights(len(dataset), chip_inds, rare_target_prop)
+    sampler = WeightedRandomSampler(weights, len(weights))
+    return sampler
 
 
 class SemanticSegmentationBackend(Backend):
@@ -160,7 +202,7 @@ class SemanticSegmentationBackend(Backend):
 
         This creates uses the train_opts 'train_count' or 'train_prop' parameter to
             subset a number (n) of the training chips. The function prioritizes
-            'train_count' and falls back to 'train_prop' if 'train_count' is not set. 
+            'train_count' and falls back to 'train_prop' if 'train_count' is not set.
             It creates two new directories 'train-{n}-img' and 'train-{n}-labels' with
             subsets of the chips that the dataloader can read from.
 
@@ -170,7 +212,7 @@ class SemanticSegmentationBackend(Backend):
         Returns:
             (str) name of the train subset image directory (e.g. 'train-{n}-img')
         """
-        
+
 
         all_train_uri = join(chip_dir, 'train-img')
         all_train = list(filter(lambda x: x.endswith(
@@ -191,7 +233,7 @@ class SemanticSegmentationBackend(Backend):
             if prop == 1:
                 return 'train-img'
             sample_size = round(prop * len(all_train))
-        
+
         random.seed(100)
         sample_images = random.sample(all_train, sample_size)
 
@@ -240,14 +282,24 @@ class SemanticSegmentationBackend(Backend):
 
         train_img_dir = self.subset_training_data(chip_dir)
 
-        data = (SegmentationItemList.from_folder(chip_dir)
-                .split_by_folder(train=train_img_dir, valid='val-img')
-                .label_from_func(get_label_path, classes=classes)
-                .transform(get_transforms(flip_vert=self.train_opts.flip_vert),
-                           size=size, tfm_y=True)
-                .databunch(bs=self.train_opts.batch_sz,
-                           num_workers=num_workers))
-        print(data)
+        def get_data(train_sampler=None):
+            data = (SegmentationItemList.from_folder(chip_dir)
+                    .split_by_folder(train=train_img_dir, valid='val-img')
+                    .label_from_func(get_label_path, classes=classes)
+                    .transform(get_transforms(flip_vert=self.train_opts.flip_vert),
+                               size=size, tfm_y=True)
+                    .databunch(bs=self.train_opts.batch_sz,
+                               num_workers=num_workers,
+                               train_sampler=train_sampler))
+            return data
+
+        data = get_data()
+        oversample = self.train_opts.oversample
+        if oversample:
+            sampler = get_weighted_sampler(
+                data.train_ds, oversample['rare_class_ids'],
+                oversample['rare_target_prop'])
+            data = get_data(train_sampler=sampler)
 
         if self.train_opts.debug:
             make_debug_chips(data, class_map, tmp_dir, train_uri)
@@ -277,7 +329,9 @@ class SemanticSegmentationBackend(Backend):
             print('Loading weights from pretrained_uri: {}'.format(
                 pretrained_uri))
             pretrained_path = download_if_needed(pretrained_uri, tmp_dir)
-            learn.load(pretrained_path[:-4])
+            learn.model.load_state_dict(
+                torch.load(pretrained_path, map_location=learn.data.device),
+                strict=False)
 
         # Save every epoch so that resume functionality provided by
         # TrackEpochCallback will work.
@@ -329,9 +383,30 @@ class SemanticSegmentationBackend(Backend):
             Labels object containing predictions
         """
         self.load_model(tmp_dir)
-        dev = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-        chip = torch.Tensor(chips[0]).to(dev).permute((2, 0, 1)).unsqueeze(0) / 255.
-        label_arr = self.inf_learner.model(chip)[0].squeeze().argmax(dim=0).detach().cpu().numpy()
+
+        chip = torch.Tensor(chips[0]).permute((2, 0, 1)) / 255.
+        im = Image(chip)
+        self.inf_learner.data.single_ds.tfmargs['size'] = self.task_config.predict_chip_size
+        self.inf_learner.data.single_ds.tfmargs_y['size'] = self.task_config.predict_chip_size
+
+        if self.train_opts.tta:
+            probs = []
+            for k in range(8):
+                trans_im = dihedral(Image(chip), k)
+                o = self.inf_learner.predict(trans_im)[2]
+                # https://forums.fast.ai/t/how-best-to-have-get-preds-or-tta-apply-specified-transforms/40731/9
+                o = Image(o)
+                if k == 5:
+                    o = dihedral(o, 6)
+                elif k == 6:
+                    o = dihedral(o, 5)
+                else:
+                    o = dihedral(o, k)
+                probs.append(o.data)
+
+            label_arr = torch.stack(probs).mean(0).argmax(0).numpy()
+        else:
+            label_arr = self.inf_learner.predict(im)[1].squeeze().numpy()
 
         # Return "trivial" instance of SemanticSegmentationLabels that holds a single
         # window and has ability to get labels for that one window.
