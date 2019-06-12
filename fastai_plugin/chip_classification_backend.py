@@ -37,6 +37,30 @@ from fastai_plugin.utils import (
 
 log = logging.getLogger(__name__)
 
+
+def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=.5, count=20):
+    def _make_debug_chips(split):
+        debug_chips_dir = join(tmp_dir, '{}-debug-chips'.format(split))
+        zip_path = join(tmp_dir, '{}-debug-chips.zip'.format(split))
+        zip_uri = join(train_uri, '{}-debug-chips.zip'.format(split))
+        make_dir(debug_chips_dir)
+        ds = data.train_ds if split == 'train' else data.valid_ds
+        n = 0
+        for i, (x, y) in enumerate(ds):
+            if n >= count:
+                break
+            if random.uniform(0, 1) < debug_prob:
+                x.show(y=y)
+                plt.savefig(join(debug_chips_dir, '{}.png'.format(i)), figsize=(5, 5))
+                plt.close()
+            n += 1
+        zipdir(debug_chips_dir, zip_path)
+        upload_or_copy(zip_path, zip_uri)
+
+    _make_debug_chips('train')
+    _make_debug_chips('val')
+
+
 def merge_class_dirs(scene_class_dirs, output_dir):
     seen_classes = set([])
     chip_ind = 0
@@ -126,67 +150,6 @@ class DatasetFiles(FileGroup):
         _upload(self.training_local_uri, self.training_zip_uri, 'training')
         _upload(self.validation_local_uri, self.validation_zip_uri,
                 'validation')
-
-
-class ModelFiles(FileGroup):
-    """Utilities for files produced when calling train."""
-
-    def __init__(self, base_uri, tmp_dir, replace_model=False):
-        """Create these model files.
-
-        Args:
-            base_uri: Base URI of the model files
-            replace_model: If the model file exists, remove.
-                           Used for the training step, to retrain
-                           existing models.
-
-        Returns:
-            A new ModelFile instance.
-        """
-        FileGroup.__init__(self, base_uri, tmp_dir)
-
-        self.model_uri = join(self.base_uri, 'model')
-        self.log_uri = join(self.base_uri, 'log.csv')
-
-        if replace_model:
-            if os.path.exists(self.model_uri):
-                os.remove(self.model_uri)
-            if os.path.exists(self.log_uri):
-                os.remove(self.log_uri)
-
-    def download_backend_config(self, pretrained_model_uri, kc_config,
-                                dataset_files, class_map):
-        from rastervision.protos.keras_classification.pipeline_pb2 \
-            import PipelineConfig
-
-        config = json_format.ParseDict(kc_config, PipelineConfig())
-
-        # Update config using local paths.
-        config.trainer.options.output_dir = self.get_local_path(self.base_uri)
-        config.model.model_path = self.get_local_path(self.model_uri)
-        config.model.nb_classes = len(class_map)
-
-        config.trainer.options.training_data_dir = \
-            dataset_files.training_download_uri
-        config.trainer.options.validation_data_dir = \
-            dataset_files.validation_download_uri
-
-        del config.trainer.options.class_names[:]
-        config.trainer.options.class_names.extend(class_map.get_class_names())
-
-        # Save the pretrained weights locally
-        pretrained_model_path = None
-        if pretrained_model_uri:
-            pretrained_model_path = self.download_if_needed(
-                pretrained_model_uri)
-
-        # Save an updated copy of the config file.
-        config_path = os.path.join(self.tmp_dir, 'kc_config.json')
-        config_str = json_format.MessageToJson(config)
-        with open(config_path, 'w') as config_file:
-            config_file.write(config_str)
-
-        return (config_path, pretrained_model_path)
 
 
 class ChipClassificationBackend(Backend):
@@ -319,11 +282,9 @@ class ChipClassificationBackend(Backend):
             return data
 
         data = get_data()
-        print('data.classes', data.classes)
-        print('data.one_batch', data.one_batch()[0].shape)
 
-        # if self.train_opts.debug:
-        #     make_debug_chips(data, class_map, tmp_dir, train_uri)
+        if self.train_opts.debug:
+            make_debug_chips(data, class_map, tmp_dir, train_uri)
 
         # Setup learner.
         ignore_idx = -1
