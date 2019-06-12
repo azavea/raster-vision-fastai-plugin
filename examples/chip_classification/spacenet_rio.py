@@ -107,7 +107,18 @@ class ChipClassificationExperiments(rv.ExperimentSet):
             'lr': 1e-4,
             'sync_interval': 10,
             'model_arch': 'resnet18',
-            'predict_chip_size': 200
+        }
+        return self.get_exp(exp_id, config, raw_uri, processed_uri, root_uri, test)
+
+    def exp_resnet50(self, raw_uri, processed_uri, root_uri, test=False):
+        exp_id = 'resnet50'
+        config = {
+            'batch_sz': 8,
+            'num_epochs': 5,
+            'debug': False,
+            'lr': 1e-4,
+            'sync_interval': 10,
+            'model_arch': 'resnet50',
         }
         return self.get_exp(exp_id, config, raw_uri, processed_uri, root_uri, test)
 
