@@ -27,4 +27,4 @@ var/
 # Jupyter
 .ipynb_checkpoints
 
-./data/
+data/*

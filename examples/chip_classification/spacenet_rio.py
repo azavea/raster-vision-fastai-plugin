@@ -23,18 +23,15 @@ class ChipClassificationExperiments(rv.ExperimentSet):
                 debug output
         """
         test = str_to_bool(test)
-        # exp_id = 'spacenet-rio-chip-classification'
-        # num_epochs = 20
-        # batch_size = 16
-        # debug = False
         train_scene_info = get_scene_info(join(processed_uri, 'train-scenes.csv'))
         val_scene_info = get_scene_info(join(processed_uri, 'val-scenes.csv'))
 
+        chip_key = 'spacenet-rio-chip-classification'
         if test:
             exp_id += '-test'
-            num_epochs = 1
-            batch_size = 1
-            debug = True
+            config['num_epochs'] = 1
+            config['batch_sz'] = 2
+            config['debug'] = True
             train_scene_info = train_scene_info[0:1]
             val_scene_info = val_scene_info[0:1]
 
@@ -58,8 +55,7 @@ class ChipClassificationExperiments(rv.ExperimentSet):
             aoi_uri = join(raw_uri, aoi_path)
 
             if test:
-                crop_uri = join(
-                    processed_uri, 'crops', os.path.basename(raster_uri))
+                crop_uri = join(processed_uri, 'crops', os.path.basename(raster_uri))
                 save_image_crop(raster_uri, crop_uri, label_uri=label_uri,
                                 size=600, min_features=20)
                 raster_uri = crop_uri
@@ -92,6 +88,7 @@ class ChipClassificationExperiments(rv.ExperimentSet):
 
         experiment = rv.ExperimentConfig.builder() \
                                         .with_id(exp_id) \
+                                        .with_chip_key(chip_key) \
                                         .with_root_uri(root_uri) \
                                         .with_task(task) \
                                         .with_backend(backend) \
@@ -109,7 +106,8 @@ class ChipClassificationExperiments(rv.ExperimentSet):
             'debug': False,
             'lr': 1e-4,
             'sync_interval': 10,
-            'model_arch': 'resnet18'
+            'model_arch': 'resnet18',
+            'predict_chip_size': 200
         }
         return self.get_exp(exp_id, config, raw_uri, processed_uri, root_uri, test)
 

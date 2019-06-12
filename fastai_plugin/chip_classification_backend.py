@@ -5,6 +5,8 @@ import zipfile
 import glob
 from pathlib import Path
 import random
+import shutil
+import logging
 
 import matplotlib
 matplotlib.use("Agg")
@@ -12,7 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from fastai.vision import (
-    SegmentationItemList, get_transforms, models, unet_learner, Image,
+    ImageList, get_transforms, models, cnn_learner, Image,
     ImageSegment)
 from fastai.callbacks import CSVLogger, TrackEpochCallback
 from fastai.basic_train import load_learner
@@ -25,13 +27,15 @@ from rastervision.utils.files import (
     download_if_needed, sync_from_dir, sync_to_dir, str_to_file)
 from rastervision.utils.misc import save_img
 from rastervision.backend import Backend
-from rastervision.data.label import SemanticSegmentationLabels
+from rastervision.data.label import ChipClassificationLabels
 from rastervision.data.label_source.utils import color_to_triple
 
 from fastai_plugin.utils import (
     SyncCallback, MySaveModelCallback, ExportCallback, MyCSVLogger,
     Precision, Recall, FBeta, zipdir)
 
+
+log = logging.getLogger(__name__)
 
 def merge_class_dirs(scene_class_dirs, output_dir):
     seen_classes = set([])
@@ -280,12 +284,19 @@ class ChipClassificationBackend(Backend):
         sync_from_dir(train_uri, train_dir)
 
         # Get zip file for each group, and unzip them into chip_dir.
-        chip_dir = join(tmp_dir, 'chips')
+        chip_dir = join(tmp_dir, 'chips/')
         make_dir(chip_dir)
         for zip_uri in list_paths(self.backend_opts.chip_uri, 'zip'):
+            zip_name = Path(zip_uri).name
+            if zip_name.startswith('train'):
+                extract_dir = chip_dir + 'train/'
+            elif zip_name.startswith('val'):
+                extract_dir = chip_dir + 'val/'
+            else:
+                continue
             zip_path = download_if_needed(zip_uri, tmp_dir)
             with zipfile.ZipFile(zip_path, 'r') as zipf:
-                zipf.extractall(chip_dir)
+                zipf.extractall(extract_dir)
 
         # Setup data loader.
         def get_label_path(im_path):
@@ -294,25 +305,25 @@ class ChipClassificationBackend(Backend):
         size = self.task_config.chip_size
         class_map = self.task_config.class_map
         classes = class_map.get_class_names()
-        # if 0 not in class_map.get_keys():
-        #     classes = ['nodata'] + classes
         num_workers = 0 if self.train_opts.debug else 4
+        tfms = get_transforms(flip_vert=self.train_opts.flip_vert)
 
         def get_data(train_sampler=None):
             data = (ImageList.from_folder(chip_dir)
-                    .split_by_folder(train='training', valid='validation')
-                    .label_from_folder(classes=classes)
-                    .transform(get_transforms(flip_vert=self.train_opts.flip_vert),
-                               size=size, tfm_y=True)
+                    .split_by_folder(train='train', valid='val')
+                    .label_from_folder()
+                    .transform(tfms, size=size)
                     .databunch(bs=self.train_opts.batch_sz,
                                num_workers=num_workers,
                                train_sampler=train_sampler))
             return data
 
         data = get_data()
+        print('data.classes', data.classes)
+        print('data.one_batch', data.one_batch()[0].shape)
 
-        if self.train_opts.debug:
-            make_debug_chips(data, class_map, tmp_dir, train_uri)
+        # if self.train_opts.debug:
+        #     make_debug_chips(data, class_map, tmp_dir, train_uri)
 
         # Setup learner.
         ignore_idx = -1
@@ -324,6 +335,7 @@ class ChipClassificationBackend(Backend):
         learn = cnn_learner(
             data, model_arch, metrics=metrics, wd=self.train_opts.weight_decay,
             path=train_dir)
+        
         learn.unfreeze()
 
         if self.train_opts.fp16 and torch.cuda.is_available():
@@ -381,6 +393,7 @@ class ChipClassificationBackend(Backend):
             model_path = download_if_needed(model_uri, tmp_dir)
             self.inf_learner = load_learner(
                 dirname(model_path), basename(model_path))
+            self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     def predict(self, chips, windows, tmp_dir):
         """Return predictions for a chip using model.
@@ -394,18 +407,17 @@ class ChipClassificationBackend(Backend):
         """
         self.load_model(tmp_dir)
 
-        chip = torch.Tensor(chips[0]).permute((2, 0, 1)) / 255.
-        im = Image(chip)
-        self.inf_learner.data.single_ds.tfmargs['size'] = self.task_config.predict_chip_size
-        self.inf_learner.data.single_ds.tfmargs_y['size'] = self.task_config.predict_chip_size
+        chips = torch.Tensor(chips).permute((0, 3, 1, 2)) / 255.
+        chips = chips.to(self.device)
+        model = self.inf_learner.model.eval()
 
-        preds = self.inf_learner.predict(chips)
+        preds = model(chips).detach().cpu()
 
         labels = ChipClassificationLabels()
 
-        for (_, predicted_class, class_probs), window in zip(preds, windows):
+        for class_probs, window in zip(preds, windows):
             # Add 1 to class_id since they start at 1.
-            class_id = int(predicted_class + 1)
+            class_id = int(class_probs.argmax() + 1)
 
             labels.set_cell(window, class_id, class_probs)
 
