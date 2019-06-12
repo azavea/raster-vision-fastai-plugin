@@ -15,7 +15,7 @@ class TrainOptions():
                  one_cycle=None,
                  num_epochs=None, model_arch=None, fp16=None,
                  flip_vert=None, sync_interval=None, debug=None,
-                 train_prop=None, train_count=None, tta=None, oversample=None, predict_chip_size=200):
+                 train_prop=None, train_count=None, tta=None, oversample=None):
         self.batch_sz = batch_sz
         self.weight_decay = weight_decay
         self.lr = lr
@@ -26,7 +26,6 @@ class TrainOptions():
         self.flip_vert = flip_vert
         self.sync_interval = sync_interval
         self.debug = debug
-        self.predict_chip_size = predict_chip_size
 
     def __setattr__(self, name, value):
         if name in ['batch_sz', 'num_epochs', 'sync_interval']:
@@ -57,16 +56,14 @@ class ChipClassificationBackendConfigBuilder(SimpleBackendConfigBuilder):
             fp16=False,
             flip_vert=False,
             sync_interval=1,
-            debug=False,
-            predict_chip_size=200):
+            debug=False):
 
         b = deepcopy(self)
         b.train_opts = TrainOptions(
             batch_sz=batch_sz, weight_decay=weight_decay, lr=lr,
             one_cycle=one_cycle,
             num_epochs=num_epochs, model_arch=model_arch, fp16=fp16,
-            flip_vert=flip_vert, sync_interval=sync_interval, debug=debug,
-            predict_chip_size=predict_chip_size)
+            flip_vert=flip_vert, sync_interval=sync_interval, debug=debug)
         return b
 
     def with_pretrained_uri(self, pretrained_uri):
