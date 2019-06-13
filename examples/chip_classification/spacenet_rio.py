@@ -30,10 +30,10 @@ class ChipClassificationExperiments(rv.ExperimentSet):
         if test:
             exp_id += '-test'
             config['num_epochs'] = 1
-            config['batch_sz'] = 32
+            config['batch_sz'] = 8
             config['debug'] = True
-            train_scene_info = train_scene_info[0:4]
-            val_scene_info = val_scene_info[0:4]
+            train_scene_info = train_scene_info[0:1]
+            val_scene_info = val_scene_info[0:1]
 
         task = rv.TaskConfig.builder(rv.CHIP_CLASSIFICATION) \
                             .with_chip_size(200) \
@@ -54,11 +54,10 @@ class ChipClassificationExperiments(rv.ExperimentSet):
             label_uri = join(processed_uri, label_uri)
             aoi_uri = join(raw_uri, aoi_path)
 
-            # if test:
-                # crop_uri = join(processed_uri, 'crops', os.path.basename(raster_uri))
-                # save_image_crop(raster_uri, crop_uri, label_uri=label_uri,
-                #                 size=600, min_features=10)
-                # raster_uri = crop_uri
+            if test:
+                crop_uri = join(processed_uri, 'crops', os.path.basename(raster_uri))
+                save_image_crop(raster_uri, crop_uri, label_uri=label_uri, size=600, min_features=5)
+                raster_uri = crop_uri
 
             id = os.path.splitext(os.path.basename(raster_uri))[0]
             label_source = rv.LabelSourceConfig.builder(rv.CHIP_CLASSIFICATION) \
