@@ -246,7 +246,42 @@ class ChipClassificationBackend(Backend):
         make_dir(train_dir)
         sync_from_dir(train_uri, train_dir)
 
-        # Get zip file for each group, and unzip them into chip_dir.
+        '''
+            Get zip file for each group, and unzip them into chip_dir in a
+            way that works well with FastAI.
+
+            The resulting directory structure would be:
+            <chip_dir>/
+                train/
+                    training-<uuid1>/
+                        <class1>/
+                            ...
+                        <class2>/
+                            ...
+                        ...
+                    training-<uuid2>/
+                        <class1>/
+                            ...
+                        <class2>/
+                            ...
+                        ...
+                    ...
+                val/
+                    validation-<uuid1>/
+                        <class1>/
+                            ...
+                        <class2>/
+                            ...
+                        ...
+                    validation-<uuid2>/
+                        <class1>/
+                            ...
+                        <class2>/
+                            ...
+                        ...
+                    ...
+
+        '''
         chip_dir = join(tmp_dir, 'chips/')
         make_dir(chip_dir)
         for zip_uri in list_paths(self.backend_opts.chip_uri, 'zip'):
@@ -368,10 +403,11 @@ class ChipClassificationBackend(Backend):
         """
         self.load_model(tmp_dir)
 
+        # (batch_size, h, w, nchannels) --> (batch_size, nchannels, h, w)
         chips = torch.Tensor(chips).permute((0, 3, 1, 2)) / 255.
         chips = chips.to(self.device)
-        model = self.inf_learner.model.eval()
 
+        model = self.inf_learner.model.eval()
         preds = model(chips).detach().cpu()
 
         labels = ChipClassificationLabels()
