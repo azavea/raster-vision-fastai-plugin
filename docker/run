@@ -76,6 +76,10 @@ do
         CMD=(jupyter notebook --ip 0.0.0.0 --port 8888 --no-browser --allow-root --notebook-dir=/opt/src)
         shift
         ;;
+        --debug)
+        DEBUG="-p 3000:3000"
+        shift
+        ;;
         *) # unknown option
         POSITIONAL+=("$1") # save it in an array for later
         shift # past argument
@@ -100,7 +104,7 @@ if [ -z "$FASTAI_REPO" ]
 then
     FASTAI_SRC_FLAGS=""
 else
-    FASTAI_SRC_FLAGS="-v ${FASTAI_REPO}/fastai:/opt/src/fastai"
+    FASTAI_SRC_FLAGS="-v ${FASTAI_REPO}:/opt/src/fastai"
 fi
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]
@@ -111,8 +115,7 @@ then
         -v "${REPO_ROOT}"/examples:/opt/src/examples \
         -v "${REPO_ROOT}"/scripts:/opt/src/scripts \
         -v ${RASTER_VISION_DATA_DIR}:/opt/data \
-        -p 3000:3000 \
-        ${TENSORBOARD} ${AWS} ${JUPYTER} ${DOCS} \
+        ${TENSORBOARD} ${AWS} ${JUPYTER} ${DOCS} ${DEBUG} \
         ${RV_SRC_FLAGS} \
         ${FASTAI_SRC_FLAGS} \
         ${IMAGE} "${CMD[@]}"
