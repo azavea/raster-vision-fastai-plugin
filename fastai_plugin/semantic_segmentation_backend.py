@@ -343,7 +343,7 @@ class SemanticSegmentationBackend(Backend):
             classes = ['nodata'] + classes
         num_workers = 0 if self.train_opts.debug else 4
 
-        train_img_dir = self.subset_training_data(
+        train_img_dir = subset_training_data(
             chip_dir, self.train_opts.train_count, self.train_opts.train_prop)
 
         def get_data(train_sampler=None):
@@ -456,7 +456,7 @@ class SemanticSegmentationBackend(Backend):
         self.inf_learner.data.single_ds.tfmargs_y['size'] = self.task_config.predict_chip_size
 
         if self.train_opts.tta:
-            label_arr = tta_predict(chip, self.inf_learner)
+            label_arr = tta_predict(self.inf_learner, chip)
         else:
             label_arr = self.inf_learner.predict(im)[1].squeeze().numpy()
 
