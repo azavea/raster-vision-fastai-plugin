@@ -176,8 +176,11 @@ class ChipClassificationBackend(Backend):
     def process_scene_data(self, scene, data, tmp_dir):
         """Process each scene's training data.
 
-        This writes {scene_id}/img/{scene_id}-{ind}.png and
-        {scene_id}/labels/{scene_id}-{ind}.png
+        This writes 
+        {tmp_dir}/scratch-{uuid}/
+            {scene_id}-{uuid}/
+                {class_name}/
+                    {chip_idx}.png
 
         Args:
             scene: Scene
@@ -213,12 +216,11 @@ class ChipClassificationBackend(Backend):
     def process_sceneset_results(self, training_results, validation_results, tmp_dir):
         """After all scenes have been processed, process the result set.
 
-        This writes a zip file for a group of scenes at {chip_uri}/{uuid}.zip
-        containing:
-        train-img/{scene_id}-{ind}.png
-        train-labels/{scene_id}-{ind}.png
-        val-img/{scene_id}-{ind}.png
-        val-labels/{scene_id}-{ind}.png
+        This writes two zip files:
+            training-{uuid}.zip
+            validation-{uuid}.zip
+        each containing
+            {class_name}/{chip_idx}.png
 
         Args:
             training_results: dependent on the ml_backend's process_scene_data
