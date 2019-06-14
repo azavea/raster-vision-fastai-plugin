@@ -17,6 +17,7 @@ from rastervision.utils.files import (sync_to_dir)
 
 
 class SyncCallback(Callback):
+    """A callback to sync from_dir to to_uri at the end of epochs."""
     def __init__(self, from_dir, to_uri, sync_interval=1):
         self.from_dir = from_dir
         self.to_uri = to_uri
@@ -28,7 +29,10 @@ class SyncCallback(Callback):
 
 
 class ExportCallback(TrackerCallback):
-    "A `TrackerCallback` that exports the model when monitored quantity is best."
+    """"Exports the model when monitored quantity is best.
+
+    The exported model is the one used for inference.
+    """
     def __init__(self, learn:Learner, model_path:str, monitor:str='valid_loss', mode:str='auto'):
         self.model_path = model_path
         super().__init__(learn, monitor=monitor, mode=mode)
@@ -45,7 +49,11 @@ class ExportCallback(TrackerCallback):
 
 
 class MySaveModelCallback(SaveModelCallback):
-    """Modified to delete the previous model that was saved."""
+    """Saves the model after each epoch to potentially resume training.
+
+    Modified from fastai version to delete the previous model that was saved
+    to avoid wasting disk space.
+    """
     def on_epoch_end(self, epoch:int, **kwargs:Any)->None:
         "Compare the value monitored to its best score and maybe save the model."
         if self.every=="epoch":
@@ -62,12 +70,11 @@ class MySaveModelCallback(SaveModelCallback):
 
 
 class MyCSVLogger(CSVLogger):
-    """Custom CSVLogger
+    """Logs metrics to a CSV file after each epoch.
 
-    Modified to:
+    Modified from fastai version to:
     - flush after each epoch
     - append to log if already exists
-    - use start_epoch
     """
     def __init__(self, learn, filename='history'):
         super().__init__(learn, filename)
@@ -84,9 +91,19 @@ class MyCSVLogger(CSVLogger):
         self.file.flush()
         return out
 
+# The following are a set of metric callbacks that have been modified from the
+# original version in fastai to support semantic segmentation, which doesn't
+# have the class dimension in position -1. It also adds an ignore_idx
+# which is used to ignore pixels with class equal to ignore_idx. These
+# would be good to contribute back upstream to fastai -- however we should
+# wait for their upcoming refactor of the callback architecture.
+
 @dataclass
 class ConfusionMatrix(Callback):
     "Computes the confusion matrix."
+    # The index of the dimension in the output and target arrays which ranges
+    # over the different classes. This is -1 (the last index) for
+    # classification, but is 1 for semantic segmentation.
     clas_idx:int=-1
 
     def on_train_begin(self, **kwargs):
@@ -114,6 +131,8 @@ class CMScores(ConfusionMatrix):
     average:Optional[str]="binary"      # `binary`, `micro`, `macro`, `weighted` or None
     pos_label:int=1                     # 0 or 1
     eps:float=1e-9
+    # If ground truth label is equal to the ignore_idx, it should be ignored
+    # for the sake of evaluation.
     ignore_idx:int=None
 
     def _recall(self):
@@ -185,6 +204,14 @@ class FBeta(CMScores):
 
 
 def zipdir(dir, zip_path):
+    """Create a zip file from a directory.
+
+    The zip file contains the contents of dir, but not dir itself.
+
+    Args:
+        dir: (str) the directory with the content to place in zip file
+        zip_path: (str) path to the zip file
+    """
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as ziph:
         for root, dirs, files in os.walk(dir):
             for file in files:

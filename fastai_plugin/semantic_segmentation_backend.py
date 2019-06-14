@@ -1,5 +1,5 @@
 import os
-from os.path import join, basename, dirname, isfile
+from os.path import join, basename, dirname
 import uuid
 import zipfile
 import glob
@@ -12,11 +12,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from fastai.vision import (
-    SegmentationItemList, get_transforms, models, unet_learner, Image,
-    ImageSegment)
-from fastai.callbacks import CSVLogger, TrackEpochCallback
+    SegmentationItemList, get_transforms, models, unet_learner, Image)
+from fastai.callbacks import TrackEpochCallback
 from fastai.basic_train import load_learner
-from fastai.basic_data import DatasetType
 from fastai.vision.transform import dihedral
 from torch.utils.data.sampler import WeightedRandomSampler
 
@@ -35,22 +33,32 @@ from fastai_plugin.utils import (
 
 # Deprecated and just here so old models can be unpickled.
 def semseg_acc(input, target):
-    # Note: custom metrics need to be at global level for learner to be saved.
-    target = target.squeeze(1)
-
-    mask = target != nodata_id
-    return (input.argmax(dim=1)[mask]==target[mask]).float().mean()
+    pass
 
 
 def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
-    # TODO get rid of white frame
+    """Save debug chips for a fastai DataBunch.
+
+    This saves a plot for each example in the training and validation sets into
+    train-debug-chips.zip and valid-debug-chips.zip under the train_uri. This
+    is useful for making sure we are feeding correct data into the model.
+
+    Args:
+        data: fastai DataBunch for a semantic segmentation dataset
+        class_map: (rv.ClassMap) class map used to map class ids to colors
+        tmp_dir: (str) path to temp directory
+        train_uri: (str) URI of root of training output
+        debug_prob: (float) probability of saving a debug plot for each example
+    """
     if 0 in class_map.get_keys():
         colors = [class_map.get_by_id(i).color
                   for i in range(len(class_map))]
     else:
+        # If 0 (ie. the ignore class) is not present in class_map, we need to
+        # start indexing class_ids at 1, and insert a color at the beginning to
+        # handle NODATA pixels which get mapped to a label class of 0.
         colors = [class_map.get_by_id(i).color
                   for i in range(1, len(class_map) + 1)]
-        # use grey for nodata
         colors = ['grey'] + colors
     colors = [color_to_triple(c) for c in colors]
     colors = [tuple([x / 255 for x in c]) for c in colors]
@@ -64,6 +72,10 @@ def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
         ds = data.train_ds if split == 'train' else data.valid_ds
         for i, (x, y) in enumerate(ds):
             if random.uniform(0, 1) < debug_prob:
+                # fastai has an x.show(y=y) method, but we need to plot the
+                # debug chips ourselves in order to use
+                # a custom color map that matches the colors in the class_map.
+                # This could be a good things to contribute upstream to fastai.
                 plt.axis('off')
                 plt.imshow(x.data.permute((1, 2, 0)).numpy())
                 plt.imshow(y.data.squeeze().numpy(), alpha=0.4, vmin=0,
@@ -78,33 +90,125 @@ def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
     _make_debug_chips('val')
 
 
-def filter_chip_inds(dataset, class_ids):
-    chip_inds = []
-    for i, (x, y) in enumerate(dataset):
-        match = False
-        for class_id in class_ids:
-            if torch.any(y.data == class_id):
-                match = True
-                break
-        if match:
-            chip_inds.append(i)
-    return chip_inds
-
-
-def get_sample_weights(num_samples, rare_chip_inds, rare_target_prob):
-    rare_weight = rare_target_prob / len(rare_chip_inds)
-    common_weight = (1 - rare_target_prob) / (num_samples - len(rare_chip_inds))
-    weights = torch.full((num_samples,), common_weight)
-    weights[rare_chip_inds] = rare_weight
-    return weights
-
-
 def get_weighted_sampler(dataset, rare_class_ids, rare_target_prop):
-    chip_inds = filter_chip_inds(dataset, rare_class_ids)
+    """Return a WeightedRandomSampler to oversample chips with rare classes.
+
+    Args:
+        dataset: PyTorch DataSet with semantic segmentation data
+        rare_class_ids: list of rare class ids
+        rare_target_prop: probability of sampling a chip covering the rare classes
+    """
+    def filter_chip_inds():
+        chip_inds = []
+        for i, (x, y) in enumerate(dataset):
+            match = False
+            for class_id in rare_class_ids:
+                if torch.any(y.data == class_id):
+                    match = True
+                    break
+            if match:
+                chip_inds.append(i)
+        return chip_inds
+
+    def get_sample_weights(num_samples, rare_chip_inds, rare_target_prob):
+        rare_weight = rare_target_prob / len(rare_chip_inds)
+        common_weight = (1 - rare_target_prob) / (num_samples - len(rare_chip_inds))
+        weights = torch.full((num_samples,), common_weight)
+        weights[rare_chip_inds] = rare_weight
+        return weights
+
+    chip_inds = filter_chip_inds()
     print('prop of rare chips before oversampling: ', len(chip_inds) / len(dataset))
     weights = get_sample_weights(len(dataset), chip_inds, rare_target_prop)
     sampler = WeightedRandomSampler(weights, len(weights))
     return sampler
+
+
+def tta_predict(learner, im_arr):
+    """Use test-time augmentation to make predictions for a single image.
+
+    This uses the dihedral transform to make 8 flipped/rotated version of the
+    input, makes a prediction for each one, and averages the predictive
+    distributions together. This will take 8x the time for a small accuracy
+    improvement.
+
+    Args:
+        learner: fastai Learner object for semantic segmentation
+        im_arr: (Tensor) of shape (nb_channels, height, width)
+
+    Returns:
+        (numpy.ndarray) of shape (height, width) containing predicted class ids
+    """
+    # Note: we are not using the TTA method built into fastai because it only
+    # works on image classification problems (and this is undocumented).
+    # We should consider contributing this upstream to fastai.
+    probs = []
+    for k in range(8):
+        trans_im = dihedral(Image(im_arr), k)
+        o = learner.predict(trans_im)[2]
+        # https://forums.fast.ai/t/how-best-to-have-get-preds-or-tta-apply-specified-transforms/40731/9
+        o = Image(o)
+        if k == 5:
+            o = dihedral(o, 6)
+        elif k == 6:
+            o = dihedral(o, 5)
+        else:
+            o = dihedral(o, k)
+        probs.append(o.data)
+
+    label_arr = torch.stack(probs).mean(0).argmax(0).numpy()
+    return label_arr
+
+
+def subset_training_data(chip_dir, count=None, prop=None):
+    """Specify a subset of all the training chips that have been created
+
+    This creates uses the train_opts 'train_count' or 'train_prop' parameter to
+        subset a number (n) of the training chips. The function prioritizes
+        'train_count' and falls back to 'train_prop' if 'train_count' is not set.
+        It creates two new directories 'train-{n}-img' and 'train-{n}-labels' with
+        subsets of the chips that the dataloader can read from.
+
+    Args:
+        chip_dir (str): path to the chip directory
+
+    Returns:
+        (str) name of the train subset image directory (e.g. 'train-{n}-img')
+    """
+    all_train_uri = join(chip_dir, 'train-img')
+    all_train = list(filter(lambda x: x.endswith(
+        '.png'), os.listdir(all_train_uri)))
+    all_train.sort()
+
+    if count:
+        if count > len(all_train):
+            raise Exception('Value for "train_count" ({}) must be less '
+                            'than or equal to the total number of chips ({}) '
+                            'in the train set.'.format(count, len(all_train)))
+        sample_size = int(count)
+    else:
+        if prop > 1 or prop < 0:
+            raise Exception('Value for "train_prop" must be between 0 and 1, got {}.'.format(prop))
+        if prop == 1:
+            return 'train-img'
+        sample_size = round(prop * len(all_train))
+
+    random.seed(100)
+    sample_images = random.sample(all_train, sample_size)
+
+    def _copy_train_chips(img_or_labels):
+        all_uri = join(chip_dir, 'train-{}'.format(img_or_labels))
+        sample_dir = 'train-{}-{}'.format(str(sample_size), img_or_labels)
+        sample_dir_uri = join(chip_dir, sample_dir)
+        make_dir(sample_dir_uri)
+        for s in sample_images:
+            upload_or_copy(join(all_uri, s), join(sample_dir_uri, s))
+        return sample_dir
+
+    for i in ('labels', 'img'):
+        d = _copy_train_chips(i)
+
+    return d
 
 
 class SemanticSegmentationBackend(Backend):
@@ -129,18 +233,18 @@ class SemanticSegmentationBackend(Backend):
         print()
 
     def process_scene_data(self, scene, data, tmp_dir):
-        """Process each scene's training data.
+        """Make training chips for a scene.
 
-        This writes {scene_id}/img/{scene_id}-{ind}.png and
-        {scene_id}/labels/{scene_id}-{ind}.png
+        This writes a set of image chips to {scene_id}/img/{scene_id}-{ind}.png
+        and corresponding label chips to {scene_id}/labels/{scene_id}-{ind}.png.
 
         Args:
-            scene: Scene
-            data: TrainingData
+            scene: (rv.data.Scene)
+            data: (rv.data.Dataset)
+            tmp_dir: (str) path to temp directory
 
         Returns:
-            backend-specific data-structures consumed by backend's
-            process_sceneset_results
+            (str) path to directory with scene chips {tmp_dir}/{scene_id}
         """
         scene_dir = join(tmp_dir, str(scene.id))
         img_dir = join(scene_dir, 'img')
@@ -161,19 +265,24 @@ class SemanticSegmentationBackend(Backend):
 
     def process_sceneset_results(self, training_results, validation_results,
                                  tmp_dir):
-        """After all scenes have been processed, process the result set.
+        """Write zip file with chips for a set of scenes.
 
-        This writes a zip file for a group of scenes at {chip_uri}/{uuid}.zip
-        containing:
+        This writes a zip file for a group of scenes at {chip_uri}/{uuid}.zip containing:
         train-img/{scene_id}-{ind}.png
         train-labels/{scene_id}-{ind}.png
         val-img/{scene_id}-{ind}.png
         val-labels/{scene_id}-{ind}.png
 
+        This method is called once per instance of the chip command.
+        A number of instances of the chip command can run simultaneously to
+        process chips in parallel. The uuid in the path above is what allows
+        separate instances to avoid overwriting each others' output.
+
         Args:
-            training_results: dependent on the ml_backend's process_scene_data
-            validation_results: dependent on the ml_backend's
-                process_scene_data
+            training_results: list of directories generated by process_scene_data
+                that all hold training chips
+            validation_results: list of directories generated by process_scene_data
+                that all hold validation chips
         """
         self.print_options()
 
@@ -197,62 +306,16 @@ class SemanticSegmentationBackend(Backend):
 
         upload_or_copy(group_path, group_uri)
 
-    def subset_training_data(self, chip_dir):
-        """ Specify a subset of all the training chips that have been created
+    def train(self, tmp_dir):
+        """Train a model.
 
-        This creates uses the train_opts 'train_count' or 'train_prop' parameter to
-            subset a number (n) of the training chips. The function prioritizes
-            'train_count' and falls back to 'train_prop' if 'train_count' is not set.
-            It creates two new directories 'train-{n}-img' and 'train-{n}-labels' with
-            subsets of the chips that the dataloader can read from.
+        This downloads any previous output saved to the train_uri,
+        starts training (or resumes from a checkpoint), periodically
+        syncs contents of train_dir to train_uri and after training finishes.
 
         Args:
-            chip_dir (str): path to the chip directory
-
-        Returns:
-            (str) name of the train subset image directory (e.g. 'train-{n}-img')
+            tmp_dir: (str) path to temp directory
         """
-
-
-        all_train_uri = join(chip_dir, 'train-img')
-        all_train = list(filter(lambda x: x.endswith(
-            '.png'), os.listdir(all_train_uri)))
-        all_train.sort()
-
-        count = self.train_opts.train_count
-        if count:
-            if count > len(all_train):
-                raise Exception('Value for "train_count" ({}) must be less '
-                                'than or equal to the total number of chips ({}) '
-                                'in the train set.'.format(count, len(all_train)))
-            sample_size = int(count)
-        else:
-            prop = self.train_opts.train_prop
-            if prop > 1 or prop < 0:
-                raise Exception('Value for "train_prop" must be between 0 and 1, got {}.'.format(prop))
-            if prop == 1:
-                return 'train-img'
-            sample_size = round(prop * len(all_train))
-
-        random.seed(100)
-        sample_images = random.sample(all_train, sample_size)
-
-        def _copy_train_chips(img_or_labels):
-            all_uri = join(chip_dir, 'train-{}'.format(img_or_labels))
-            sample_dir = 'train-{}-{}'.format(str(sample_size), img_or_labels)
-            sample_dir_uri = join(chip_dir, sample_dir)
-            make_dir(sample_dir_uri)
-            for s in sample_images:
-                upload_or_copy(join(all_uri, s), join(sample_dir_uri, s))
-            return sample_dir
-
-        for i in ('labels', 'img'):
-            d = _copy_train_chips(i)
-
-        return d
-
-    def train(self, tmp_dir):
-        """Train a model."""
         self.print_options()
 
         # Sync output of previous training run from cloud.
@@ -280,7 +343,8 @@ class SemanticSegmentationBackend(Backend):
             classes = ['nodata'] + classes
         num_workers = 0 if self.train_opts.debug else 4
 
-        train_img_dir = self.subset_training_data(chip_dir)
+        train_img_dir = self.subset_training_data(
+            chip_dir, self.train_opts.train_count, self.train_opts.train_prop)
 
         def get_data(train_sampler=None):
             data = (SegmentationItemList.from_folder(chip_dir)
@@ -373,14 +437,16 @@ class SemanticSegmentationBackend(Backend):
                 dirname(model_path), basename(model_path))
 
     def predict(self, chips, windows, tmp_dir):
-        """Return predictions for a chip using model.
+        """Return a prediction for a single chip.
 
         Args:
-            chips: [[height, width, channels], ...] numpy array of chips
-            windows: List of boxes that are the windows aligned with the chips.
+            chips: (numpy.ndarray) of shape (1, height, width, nb_channels)
+                containing a single imagery chip
+            windows: List containing a single window which is aligned with the
+                chip
 
         Return:
-            Labels object containing predictions
+            (SemanticSegmentationLabels) containing predictions
         """
         self.load_model(tmp_dir)
 
@@ -390,21 +456,7 @@ class SemanticSegmentationBackend(Backend):
         self.inf_learner.data.single_ds.tfmargs_y['size'] = self.task_config.predict_chip_size
 
         if self.train_opts.tta:
-            probs = []
-            for k in range(8):
-                trans_im = dihedral(Image(chip), k)
-                o = self.inf_learner.predict(trans_im)[2]
-                # https://forums.fast.ai/t/how-best-to-have-get-preds-or-tta-apply-specified-transforms/40731/9
-                o = Image(o)
-                if k == 5:
-                    o = dihedral(o, 6)
-                elif k == 6:
-                    o = dihedral(o, 5)
-                else:
-                    o = dihedral(o, k)
-                probs.append(o.data)
-
-            label_arr = torch.stack(probs).mean(0).argmax(0).numpy()
+            label_arr = tta_predict(chip, self.inf_learner)
         else:
             label_arr = self.inf_learner.predict(im)[1].squeeze().numpy()
 
