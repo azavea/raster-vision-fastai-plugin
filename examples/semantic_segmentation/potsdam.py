@@ -9,7 +9,8 @@ from fastai_plugin.semantic_segmentation_backend_config import (
 
 
 class PotsdamSemanticSegmentation(rv.ExperimentSet):
-    def get_exp(self, exp_id, config, raw_uri, processed_uri, root_uri, test=False):
+    def get_exp(self, exp_id, config, raw_uri, processed_uri, root_uri,
+                test=False, pred_chip_size=300):
         """Run an experiment on the ISPRS Potsdam dataset.
 
         Args:
@@ -126,6 +127,25 @@ class PotsdamSemanticSegmentation(rv.ExperimentSet):
         }
         return self.get_exp(exp_id, config, raw_uri, processed_uri, root_uri,
                             test)
+
+    def exp_better_resnet18(self, raw_uri, processed_uri, root_uri, test=False):
+        # A set of hyperparams that result in greater accuracy.
+        exp_id = 'resnet18_better'
+        config = {
+            'batch_sz': 16,
+            'num_epochs': 20,
+            'debug': False,
+            'lr': 1e-4,
+            'one_cycle': True,
+            'sync_interval': 1,
+            'tta': True,
+            'model_arch': 'resnet18',
+            'flip_vert': True
+        }
+
+        pred_chip_size = 1200
+        return self.get_exp(exp_id, config, raw_uri, processed_uri, root_uri,
+                            test=test, pred_chip_size=pred_chip_size)
 
     def exp_resnet50(self, raw_uri, processed_uri, root_uri, test=False):
         exp_id = 'resnet50'

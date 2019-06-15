@@ -65,6 +65,46 @@ class SemanticSegmentationBackendConfigBuilder(SimpleBackendConfigBuilder):
             train_count=None,
             tta=False,
             oversample=None):
+        """Set options for training models.
+
+        Args:
+            batch_sz: (int) the batch size
+            weight_decay: (float) the weight decay
+            lr: (float or None) the learning rate if using a fixed LR (ie. one_cycle is False),
+                or the maximum LR to use if one_cycle is True,
+                or None if automatic learning rate finder (fastai lr_find)
+                should be used
+            one_cycle: (bool) True if fastai fit_one_cycle should be used. This
+                cycles the LR once during the course of training and seems to
+                result in a pretty consistent improvement. See lr for more
+                details.
+            num_epochs: (int) number of epochs (sweeps through training set) to
+                train model for
+            model_arch: (str) classification model backbone to use for UNet
+                architecture. Any option in torchvision.models is valid, for
+                example, resnet18.
+            fp16: (bool) use mixed-precision training. Ideally, this will make
+                things run 2x fast.
+            flip_vert: (bool) use vertical flips and rotations for data aug
+            sync_interval: (int) sync training directory to cloud every
+                sync_interval epochs.
+            debug: (bool) if True, save debug chips (ie. visualizations of
+                input to model during training) during training and use
+                single-core for creating minibatches.
+            train_prop: (float) number between 0 and 1 that controls what
+                proportion of the training set is used for training
+            train_count: (int) number of training examples to use during
+                training
+            tta: (bool) if True, use test-time augmentation. This will make
+                a prediction for 8 flips/rotations of the image and then
+                average them together. Should result in small improvement in
+                accuracy, but 8x slowdown.
+            oversample: (dict or None) of form
+                {'rare_class_ids': <list of class ids>, 'rare_target_prop': <float>}
+                This will make it so chips containing any labels in rare_class_ids
+                will be sampled with a probability of rare_target_prop. This is
+                to help cope with severely imbalanced datasets.
+        """
         b = deepcopy(self)
         b.train_opts = TrainOptions(
             batch_sz=batch_sz, weight_decay=weight_decay, lr=lr,
