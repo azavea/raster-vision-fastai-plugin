@@ -13,32 +13,35 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from fastai.vision import (
-    ImageList, get_transforms, models, cnn_learner, Image,
-    ImageSegment)
+from fastai.vision import (ImageList, get_transforms, models, cnn_learner,
+                           Image, ImageSegment)
 from fastai.callbacks import CSVLogger, TrackEpochCallback
 from fastai.basic_train import load_learner
 from fastai.basic_data import DatasetType
 from fastai.vision.transform import dihedral
 from torch.utils.data.sampler import WeightedRandomSampler
 
-from rastervision.utils.files import (
-    get_local_path, make_dir, upload_or_copy, list_paths,
-    download_if_needed, sync_from_dir, sync_to_dir, str_to_file)
+from rastervision.utils.files import (get_local_path, make_dir, upload_or_copy,
+                                      list_paths, download_if_needed,
+                                      sync_from_dir, sync_to_dir, str_to_file)
 from rastervision.utils.misc import save_img
 from rastervision.backend import Backend
 from rastervision.data.label import ChipClassificationLabels
 from rastervision.data.label_source.utils import color_to_triple
 
-from fastai_plugin.utils import (
-    SyncCallback, MySaveModelCallback, ExportCallback, MyCSVLogger,
-    Precision, Recall, FBeta, zipdir)
-
+from fastai_plugin.utils import (SyncCallback, MySaveModelCallback,
+                                 ExportCallback, MyCSVLogger, Precision,
+                                 Recall, FBeta, zipdir)
 
 log = logging.getLogger(__name__)
 
 
-def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=.5, count=20):
+def make_debug_chips(data,
+                     class_map,
+                     tmp_dir,
+                     train_uri,
+                     debug_prob=.5,
+                     count=20):
     def _make_debug_chips(split):
         debug_chips_dir = join(tmp_dir, '{}-debug-chips'.format(split))
         zip_path = join(tmp_dir, '{}-debug-chips.zip'.format(split))
@@ -51,7 +54,8 @@ def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=.5, count=2
                 break
             if random.uniform(0, 1) < debug_prob:
                 x.show(y=y)
-                plt.savefig(join(debug_chips_dir, '{}.png'.format(i)), figsize=(5, 5))
+                plt.savefig(
+                    join(debug_chips_dir, '{}.png'.format(i)), figsize=(5, 5))
                 plt.close()
             n += 1
         zipdir(debug_chips_dir, zip_path)
@@ -106,14 +110,20 @@ class DatasetFiles(FileGroup):
 
         self.partition_id = uuid.uuid4()
 
-        self.training_zip_uri = join(base_uri, 'training-{}.zip'.format(self.partition_id))
-        self.training_local_uri = join(self.base_dir, 'training-{}'.format(self.partition_id))
-        self.training_download_uri = self.get_local_path(join(self.base_uri, 'training'))
+        self.training_zip_uri = join(
+            base_uri, 'training-{}.zip'.format(self.partition_id))
+        self.training_local_uri = join(self.base_dir,
+                                       'training-{}'.format(self.partition_id))
+        self.training_download_uri = self.get_local_path(
+            join(self.base_uri, 'training'))
         make_dir(self.training_local_uri)
 
-        self.validation_zip_uri = join(base_uri, 'validation-{}.zip'.format(self.partition_id))
-        self.validation_local_uri = join(self.base_dir, 'validation-{}'.format(self.partition_id))
-        self.validation_download_uri = self.get_local_path(join(self.base_uri, 'validation'))
+        self.validation_zip_uri = join(
+            base_uri, 'validation-{}.zip'.format(self.partition_id))
+        self.validation_local_uri = join(
+            self.base_dir, 'validation-{}'.format(self.partition_id))
+        self.validation_download_uri = self.get_local_path(
+            join(self.base_uri, 'validation'))
         make_dir(self.validation_local_uri)
 
     def download(self):
@@ -213,7 +223,8 @@ class ChipClassificationBackend(Backend):
 
         return class_dirs
 
-    def process_sceneset_results(self, training_results, validation_results, tmp_dir):
+    def process_sceneset_results(self, training_results, validation_results,
+                                 tmp_dir):
         """After all scenes have been processed, process the result set.
 
         This writes two zip files:
@@ -237,7 +248,6 @@ class ChipClassificationBackend(Backend):
         merge_class_dirs(validation_results, validation_dir)
         dataset_files.upload()
 
-
     def train(self, tmp_dir):
         """Train a model."""
         self.print_options()
@@ -247,7 +257,6 @@ class ChipClassificationBackend(Backend):
         train_dir = get_local_path(train_uri, tmp_dir)
         make_dir(train_dir)
         sync_from_dir(train_uri, train_dir)
-
         '''
             Get zip file for each group, and unzip them into chip_dir in a
             way that works well with FastAI.
@@ -309,13 +318,12 @@ class ChipClassificationBackend(Backend):
         tfms = get_transforms(flip_vert=self.train_opts.flip_vert)
 
         def get_data(train_sampler=None):
-            data = (ImageList.from_folder(chip_dir)
-                    .split_by_folder(train='train', valid='val')
-                    .label_from_folder()
-                    .transform(tfms, size=size)
-                    .databunch(bs=self.train_opts.batch_sz,
-                               num_workers=num_workers,
-                               train_sampler=train_sampler))
+            data = (ImageList.from_folder(chip_dir).split_by_folder(
+                train='train', valid='val').label_from_folder().transform(
+                    tfms, size=size).databunch(
+                        bs=self.train_opts.batch_sz,
+                        num_workers=num_workers,
+                    ))
             return data
 
         data = get_data()
@@ -328,12 +336,17 @@ class ChipClassificationBackend(Backend):
         metrics = [
             Precision(average='weighted', clas_idx=1, ignore_idx=ignore_idx),
             Recall(average='weighted', clas_idx=1, ignore_idx=ignore_idx),
-            FBeta(average='weighted', clas_idx=1, beta=1, ignore_idx=ignore_idx)]
+            FBeta(
+                average='weighted', clas_idx=1, beta=1, ignore_idx=ignore_idx)
+        ]
         model_arch = getattr(models, self.train_opts.model_arch)
         learn = cnn_learner(
-            data, model_arch, metrics=metrics, wd=self.train_opts.weight_decay,
+            data,
+            model_arch,
+            metrics=metrics,
+            wd=self.train_opts.weight_decay,
             path=train_dir)
-        
+
         learn.unfreeze()
 
         if self.train_opts.fp16 and torch.cuda.is_available():
@@ -391,7 +404,8 @@ class ChipClassificationBackend(Backend):
             model_path = download_if_needed(model_uri, tmp_dir)
             self.inf_learner = load_learner(
                 dirname(model_path), basename(model_path))
-            self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+            self.device = torch.device("cuda:0" if torch.cuda.
+                                       is_available() else "cpu")
 
     def predict(self, chips, windows, tmp_dir):
         """Return predictions for a chip using model.
