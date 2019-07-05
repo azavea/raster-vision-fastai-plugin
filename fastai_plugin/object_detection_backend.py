@@ -13,8 +13,9 @@ import torch
 from fastai.vision import (
     ObjectItemList, bb_pad_collate, get_transforms, models,
     Image, get_annotations)
-from fastai.callbacks import SaveModelCallback, CSVLogger, TrackEpochCallback
+from fastai.callbacks import TrackEpochCallback
 from fastai.basic_train import load_learner, Learner
+
 
 from rastervision.utils.files import (
     get_local_path, make_dir, upload_or_copy, list_paths,
@@ -25,7 +26,7 @@ from rastervision.backend import Backend
 from rastervision.data import ObjectDetectionLabels
 
 from fastai_plugin.utils import (
-    SyncCallback, ExportCallback, MyCSVLogger, get_last_epoch,
+    SyncCallback, MySaveModelCallback, ExportCallback, MyCSVLogger,
     Precision, Recall, FBeta, zipdir)
 from fastai_plugin.retinanet import (
     create_body, RetinaNet, RetinaNetFocalLoss, retina_net_split,
@@ -227,6 +228,7 @@ class ObjectDetectionBackend(Backend):
         crit = RetinaNetFocalLoss(scales=scales, ratios=ratios)
         learn = Learner(data, model, loss_func=crit, path=train_dir)
         learn = learn.split(retina_net_split)
+        learn.unfreeze()
 
         model_path = get_local_path(self.backend_opts.model_uri, tmp_dir)
 
@@ -239,15 +241,24 @@ class ObjectDetectionBackend(Backend):
 
         callbacks = [
             TrackEpochCallback(learn),
-            SaveModelCallback(learn, every='epoch'),
+            MySaveModelCallback(learn, every='epoch'),
             MyCSVLogger(learn, filename='log'),
-            ExportCallback(learn, model_path),
+            ExportCallback(learn, model_path, monitor='valid_loss'),
             SyncCallback(train_dir, self.backend_opts.train_uri,
                          self.train_opts.sync_interval)
         ]
-        learn.unfreeze()
-        learn.fit(self.train_opts.num_epochs, self.train_opts.lr,
-                  callbacks=callbacks)
+
+        lr = self.train_opts.lr
+        num_epochs = self.train_opts.num_epochs
+        if self.train_opts.one_cycle:
+            if lr is None:
+                learn.lr_find()
+                learn.recorder.plot(suggestion=True, return_fig=True)
+                lr = learn.recorder.min_grad_lr
+                print('lr_find() found lr: {}'.format(lr))
+            learn.fit_one_cycle(num_epochs, lr, callbacks=callbacks)
+        else:
+            learn.fit(num_epochs, lr, callbacks=callbacks)
 
         # Since model is exported every epoch, we need some other way to
         # show that training is finished.
@@ -277,61 +288,6 @@ class ObjectDetectionBackend(Backend):
             Labels object containing predictions
         """
         self.load_model(tmp_dir)
-
-        '''
-        # Sync output of previous training run from cloud.
-        train_uri = self.backend_opts.train_uri
-        train_dir = get_local_path(train_uri, tmp_dir)
-        make_dir(train_dir)
-        sync_from_dir(train_uri, train_dir)
-
-        # Get zip file for each group, and unzip them into chip_dir.
-        chip_dir = join(tmp_dir, 'chips')
-        make_dir(chip_dir)
-        for zip_uri in list_paths(self.backend_opts.chip_uri, 'zip'):
-            zip_path = download_if_needed(zip_uri, tmp_dir)
-            with zipfile.ZipFile(zip_path, 'r') as zipf:
-                zipf.extractall(chip_dir)
-
-        # Setup data loader.
-        train_images = []
-        train_lbl_bbox = []
-        for annotation_path in glob.glob(join(chip_dir, 'train/*.json')):
-            images, lbl_bbox = get_annotations(annotation_path)
-            train_images += images
-            train_lbl_bbox += lbl_bbox
-
-        val_images = []
-        val_lbl_bbox = []
-        for annotation_path in glob.glob(join(chip_dir, 'valid/*.json')):
-            images, lbl_bbox = get_annotations(annotation_path)
-            val_images += images
-            val_lbl_bbox += lbl_bbox
-
-        images = train_images + val_images
-        lbl_bbox = train_lbl_bbox + val_lbl_bbox
-
-        img2bbox = dict(zip(images, lbl_bbox))
-        get_y_func = lambda o: img2bbox[o.name]
-        num_workers = 0 if self.train_opts.debug else 4
-        data = ObjectItemList.from_folder(chip_dir)
-        data = data.split_by_folder()
-        data = data.label_from_func(get_y_func)
-        data = data.transform(
-            get_transforms(), size=self.task_config.chip_size, tfm_y=True)
-        data = data.databunch(
-            bs=self.train_opts.batch_sz, collate_fn=bb_pad_collate,
-            num_workers=num_workers)
-        print(data)
-
-        self.inf_learner.data = data
-        show_results(self.inf_learner, start=0, n=4, detect_thresh=0.5,
-                     figsize=(10, 25))
-        plt.savefig('/opt/data/tmp')
-        '''
-
-        #####
-
         labels = ObjectDetectionLabels.make_empty()
         chips = torch.Tensor(chips).permute((0, 3, 1, 2)) / 255.
         chips = chips.to(self.device)

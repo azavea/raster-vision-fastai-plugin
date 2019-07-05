@@ -11,12 +11,13 @@ FASTAI_OBJECT_DETECTION = 'FASTAI_OBJECT_DETECTION'
 
 
 class TrainOptions():
-    def __init__(self, batch_sz=None, weight_decay=None, lr=None,
+    def __init__(self, batch_sz=None, weight_decay=None, lr=None, one_cycle=None,
                  num_epochs=None, model_arch=None, fp16=None,
                  sync_interval=None, debug=None):
         self.batch_sz = batch_sz
         self.weight_decay = weight_decay
         self.lr = lr
+        self.one_cycle = one_cycle
         self.num_epochs = num_epochs
         self.model_arch = model_arch
         self.fp16 = fp16
@@ -35,7 +36,7 @@ class ObjectDetectionBackendConfig(SimpleBackendConfig):
     backend_class = ObjectDetectionBackend
 
 
-class SemanticSegmentationBackendConfigBuilder(SimpleBackendConfigBuilder):
+class ObjectDetectionBackendConfigBuilder(SimpleBackendConfigBuilder):
     config_class = ObjectDetectionBackendConfig
 
     def _applicable_tasks(self):
@@ -46,6 +47,7 @@ class SemanticSegmentationBackendConfigBuilder(SimpleBackendConfigBuilder):
             batch_sz=8,
             weight_decay=1e-2,
             lr=1e-4,
+            one_cycle=False,
             num_epochs=5,
             model_arch='resnet18',
             fp16=False,
@@ -53,7 +55,7 @@ class SemanticSegmentationBackendConfigBuilder(SimpleBackendConfigBuilder):
             debug=False):
         b = deepcopy(self)
         b.train_opts = TrainOptions(
-            batch_sz=batch_sz, weight_decay=weight_decay, lr=lr,
+            batch_sz=batch_sz, weight_decay=weight_decay, lr=lr, one_cycle=one_cycle,
             num_epochs=num_epochs, model_arch=model_arch, fp16=fp16,
             sync_interval=sync_interval, debug=debug)
         return b
@@ -66,4 +68,4 @@ class SemanticSegmentationBackendConfigBuilder(SimpleBackendConfigBuilder):
 def register_plugin(plugin_registry):
     plugin_registry.register_config_builder(
         rv.BACKEND, FASTAI_OBJECT_DETECTION,
-        SemanticSegmentationBackendConfigBuilder)
+        ObjectDetectionBackendConfigBuilder)

@@ -21,12 +21,13 @@ class CowcObjectDetectionExperiments(rv.ExperimentSet):
         """
         test = str_to_bool(test)
         exp_id = 'cowc-object-detection'
-        num_epochs = 50
+        num_epochs = 20
         batch_sz = 16
         debug = False
-        lr = 2e-5
+        lr = 1e-4
         model_arch = 'resnet18'
         sync_interval = 10
+        one_cycle = True
         train_scene_ids = ['2_10', '2_11', '2_12', '2_14', '3_11',
                            '3_13', '4_10', '5_10', '6_7', '6_9']
         val_scene_ids = ['2_13', '6_8', '3_10']
@@ -55,6 +56,7 @@ class CowcObjectDetectionExperiments(rv.ExperimentSet):
             'num_epochs': num_epochs,
             'debug': debug,
             'lr': lr,
+            'one_cycle': one_cycle,
             'sync_interval': sync_interval,
             'model_arch': model_arch
         }

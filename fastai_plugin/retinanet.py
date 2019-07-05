@@ -1,3 +1,5 @@
+# Code was adapted from https://github.com/fastai/fastai_docs/blob/master/dev_nb/102a_coco.ipynb
+
 from fastai.vision.models.unet import _get_sfs_idxs, model_sizes, hook_outputs
 from fastai.vision import *
 
@@ -379,17 +381,3 @@ def compute_class_AP(model, dl, n_classes, iou_thresh=0.5, detect_thresh=0.35, n
             aps.append(compute_ap(precision, recall))
         else: aps.append(0.)
     return aps
-
-
-'''
-learn = Learner(data, model, loss_func=crit)
-learn = learn.split(retina_net_split)
-learn.freeze()
-learn.fit(5, 1e-4)
-
-learn.unfreeze()
-learn.fit(5, 1e-6)
-
-L = compute_class_AP(learn.model, data.valid_dl, data.c-1)
-for ap,cl in zip(L, data.classes[1:]): print(f'{cl}: {ap:.6f}')
-'''
