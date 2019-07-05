@@ -13,10 +13,9 @@ import numpy as np
 import torch
 from fastai.vision import (
     SegmentationItemList, get_transforms, models, unet_learner, Image)
-from fastai.callbacks import TrackEpochCallback
+from fastai.callbacks import TrackEpochCallback, OverSamplingCallback
 from fastai.basic_train import load_learner
 from fastai.vision.transform import dihedral
-from torch.utils.data.sampler import WeightedRandomSampler
 
 from rastervision.utils.files import (
     get_local_path, make_dir, upload_or_copy, list_paths,
@@ -69,20 +68,25 @@ def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
         zip_path = join(tmp_dir, '{}-debug-chips.zip'.format(split))
         zip_uri = join(train_uri, '{}-debug-chips.zip'.format(split))
         make_dir(debug_chips_dir)
-        ds = data.train_ds if split == 'train' else data.valid_ds
-        for i, (x, y) in enumerate(ds):
-            if random.uniform(0, 1) < debug_prob:
-                # fastai has an x.show(y=y) method, but we need to plot the
-                # debug chips ourselves in order to use
-                # a custom color map that matches the colors in the class_map.
-                # This could be a good things to contribute upstream to fastai.
-                plt.axis('off')
-                plt.imshow(x.data.permute((1, 2, 0)).numpy())
-                plt.imshow(y.data.squeeze().numpy(), alpha=0.4, vmin=0,
-                           vmax=len(colors), cmap=cmap)
-                plt.savefig(join(debug_chips_dir, '{}.png'.format(i)),
-                            figsize=(3, 3))
-                plt.close()
+        dl = data.train_dl if split == 'train' else data.valid_dl
+        i = 0
+        for _, (x_batch, y_batch) in enumerate(dl):
+            for x, y in zip(x_batch, y_batch):
+                x = x.squeeze()
+                y = y.squeeze()
+                if random.uniform(0, 1) < debug_prob:
+                    # fastai has an x.show(y=y) method, but we need to plot the
+                    # debug chips ourselves in order to use
+                    # a custom color map that matches the colors in the class_map.
+                    # This could be a good things to contribute upstream to fastai.
+                    plt.axis('off')
+                    plt.imshow(x.data.permute((1, 2, 0)).numpy())
+                    plt.imshow(y.data.squeeze().numpy(), alpha=0.4, vmin=0,
+                               vmax=len(colors), cmap=cmap)
+                    plt.savefig(join(debug_chips_dir, '{}.png'.format(i)),
+                                figsize=(3, 3))
+                    plt.close()
+                    i += 1
         zipdir(debug_chips_dir, zip_path)
         upload_or_copy(zip_path, zip_uri)
 
@@ -90,13 +94,14 @@ def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
     _make_debug_chips('val')
 
 
-def get_weighted_sampler(dataset, rare_class_ids, rare_target_prop):
-    """Return a WeightedRandomSampler to oversample chips with rare classes.
+def get_oversampling_weights(dataset, rare_class_ids, rare_target_prop):
+    """Return weight vector for oversampling chips with rare classes.
 
     Args:
         dataset: PyTorch DataSet with semantic segmentation data
         rare_class_ids: list of rare class ids
-        rare_target_prop: probability of sampling a chip covering the rare classes
+        rare_target_prop: desired probability of sampling a chip covering the
+            rare classes
     """
     def filter_chip_inds():
         chip_inds = []
@@ -120,8 +125,7 @@ def get_weighted_sampler(dataset, rare_class_ids, rare_target_prop):
     chip_inds = filter_chip_inds()
     print('prop of rare chips before oversampling: ', len(chip_inds) / len(dataset))
     weights = get_sample_weights(len(dataset), chip_inds, rare_target_prop)
-    sampler = WeightedRandomSampler(weights, len(weights))
-    return sampler
+    return weights
 
 
 def tta_predict(learner, im_arr):
@@ -346,27 +350,13 @@ class SemanticSegmentationBackend(Backend):
         train_img_dir = subset_training_data(
             chip_dir, self.train_opts.train_count, self.train_opts.train_prop)
 
-        def get_data(train_sampler=None):
-            data = (SegmentationItemList.from_folder(chip_dir)
-                    .split_by_folder(train=train_img_dir, valid='val-img')
-                    .label_from_func(get_label_path, classes=classes)
-                    .transform(get_transforms(flip_vert=self.train_opts.flip_vert),
-                               size=size, tfm_y=True)
-                    .databunch(bs=self.train_opts.batch_sz,
-                               num_workers=num_workers,
-                               train_sampler=train_sampler))
-            return data
-
-        data = get_data()
-        oversample = self.train_opts.oversample
-        if oversample:
-            sampler = get_weighted_sampler(
-                data.train_ds, oversample['rare_class_ids'],
-                oversample['rare_target_prop'])
-            data = get_data(train_sampler=sampler)
-
-        if self.train_opts.debug:
-            make_debug_chips(data, class_map, tmp_dir, train_uri)
+        data = (SegmentationItemList.from_folder(chip_dir)
+                .split_by_folder(train=train_img_dir, valid='val-img')
+                .label_from_func(get_label_path, classes=classes)
+                .transform(get_transforms(flip_vert=self.train_opts.flip_vert),
+                           size=size, tfm_y=True)
+                .databunch(bs=self.train_opts.batch_sz,
+                           num_workers=num_workers))
 
         # Setup learner.
         ignore_idx = 0
@@ -407,6 +397,19 @@ class SemanticSegmentationBackend(Backend):
             SyncCallback(train_dir, self.backend_opts.train_uri,
                          self.train_opts.sync_interval)
         ]
+
+        oversample = self.train_opts.oversample
+        if oversample:
+            weights = get_oversampling_weights(
+                data.train_ds, oversample['rare_class_ids'],
+                oversample['rare_target_prop'])
+            oversample_callback = OverSamplingCallback(learn, weights=weights)
+            callbacks.append(oversample_callback)
+
+        if self.train_opts.debug:
+            if oversample:
+                oversample_callback.on_train_begin()
+            make_debug_chips(data, class_map, tmp_dir, train_uri)
 
         lr = self.train_opts.lr
         num_epochs = self.train_opts.num_epochs
