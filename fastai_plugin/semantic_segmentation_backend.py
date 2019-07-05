@@ -69,20 +69,25 @@ def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
         zip_path = join(tmp_dir, '{}-debug-chips.zip'.format(split))
         zip_uri = join(train_uri, '{}-debug-chips.zip'.format(split))
         make_dir(debug_chips_dir)
-        ds = data.train_ds if split == 'train' else data.valid_ds
-        for i, (x, y) in enumerate(ds):
-            if random.uniform(0, 1) < debug_prob:
-                # fastai has an x.show(y=y) method, but we need to plot the
-                # debug chips ourselves in order to use
-                # a custom color map that matches the colors in the class_map.
-                # This could be a good things to contribute upstream to fastai.
-                plt.axis('off')
-                plt.imshow(x.data.permute((1, 2, 0)).numpy())
-                plt.imshow(y.data.squeeze().numpy(), alpha=0.4, vmin=0,
-                           vmax=len(colors), cmap=cmap)
-                plt.savefig(join(debug_chips_dir, '{}.png'.format(i)),
-                            figsize=(3, 3))
-                plt.close()
+        dl = data.train_dl if split == 'train' else data.valid_dl
+        i = 0
+        for _, (x_batch, y_batch) in enumerate(dl):
+            for x, y in zip(x_batch, y_batch):
+                x = x.squeeze()
+                y = y.squeeze()
+                if random.uniform(0, 1) < debug_prob:
+                    # fastai has an x.show(y=y) method, but we need to plot the
+                    # debug chips ourselves in order to use
+                    # a custom color map that matches the colors in the class_map.
+                    # This could be a good things to contribute upstream to fastai.
+                    plt.axis('off')
+                    plt.imshow(x.data.permute((1, 2, 0)).numpy())
+                    plt.imshow(y.data.squeeze().numpy(), alpha=0.4, vmin=0,
+                               vmax=len(colors), cmap=cmap)
+                    plt.savefig(join(debug_chips_dir, '{}.png'.format(i)),
+                                figsize=(3, 3))
+                    plt.close()
+                    i += 1
         zipdir(debug_chips_dir, zip_path)
         upload_or_copy(zip_path, zip_uri)
 
