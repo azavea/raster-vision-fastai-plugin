@@ -62,6 +62,10 @@ def loss_batch(model:nn.Module, xb:Tensor, yb:Tensor, loss_func:OptLossFunc=None
     "Calculate loss and metrics for a batch, call out to callbacks as necessary."
     cb_handler = ifnone(cb_handler, CallbackHandler())
     images = xb
+
+    # XXX forcing model to be in training model so we can get the loss for both
+    # the training and validation datasets
+    model.train()
     batch_sz = len(xb)
     targets = []
     for i in range(batch_sz):
@@ -301,7 +305,8 @@ class ObjectDetectionBackend(Backend):
         """Load the model in preparation for one or more prediction calls."""
         if self.inf_learner is None:
             self.print_options()
-            model_uri = self.backend_opts.model_uri
+            # XXX
+            model_uri = self.backend_opts.model_uri + '.pth'
             model_path = download_if_needed(model_uri, tmp_dir)
             self.inf_learner = load_learner(
                 dirname(model_path), basename(model_path))

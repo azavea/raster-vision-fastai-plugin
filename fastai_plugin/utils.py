@@ -45,7 +45,9 @@ class ExportCallback(TrackerCallback):
             print(f'Better model found at epoch {epoch} with {self.monitor} value: {current}.')
             self.best = current
             print(f'Exporting to {self.model_path}')
-            self.learn.export(self.model_path)
+            # XXX switch to using save
+            # self.learn.export(self.model_path)
+            self.learn.save(self.model_path)
 
 
 class MySaveModelCallback(SaveModelCallback):

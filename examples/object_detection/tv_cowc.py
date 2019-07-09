@@ -34,7 +34,7 @@ class CowcObjectDetectionExperiments(rv.ExperimentSet):
 
         if test:
             exp_id += '-test'
-            num_epochs = 1
+            num_epochs = 3
             batch_sz = 1
             debug = True
             train_scene_ids = train_scene_ids[0:1]
