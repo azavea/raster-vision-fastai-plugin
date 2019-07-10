@@ -32,8 +32,9 @@ from fastai_plugin.retinanet import (
     create_body, RetinaNet, RetinaNetFocalLoss, retina_net_split,
     get_predictions, show_results)
 import torchvision
-from torchvision_refs.detection.engine import train_one_epoch, evaluate
-import torchvision_refs.detection.utils as tv_utils
+from fastai_plugin.torchvision_refs.detection.engine import (
+    train_one_epoch, evaluate)
+import fastai_plugin.torchvision_refs.detection.utils as tv_utils
 
 
 def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
@@ -223,38 +224,53 @@ class ObjectDetectionBackend(Backend):
             make_debug_chips(
                 data, self.task_config.class_map, tmp_dir, train_uri)
 
-        # TODO data loader stuff
-        dataset = None
-        dataset_test = None
-        num_classes = None
+        dataset = data.train_ds
+        dataset_test = data.valid_ds
+
+        def fastai_to_tv(x, y):
+            # TODO
+            image_id = 'null'
+            target = {
+                'boxes': y[0],
+                'labels': y[1],
+                'image_id': image_id,
+                'area': x.data.shape[1] * x.data.shape[2]
+            }
+            return x.data, target
+
+        # TODO monkey patch __getitem__ to use fastai_to_tv
+        # dataset.__getitem__ = (
+
+        num_classes = data.c
 
         train_sampler = torch.utils.data.RandomSampler(dataset)
         test_sampler = torch.utils.data.SequentialSampler(dataset_test)
         train_batch_sampler = torch.utils.data.BatchSampler(
-            train_sampler, self.backend_opts.batch_sz, drop_last=True)
-
+            train_sampler, self.train_opts.batch_sz, drop_last=True)
         data_loader = torch.utils.data.DataLoader(
             dataset, batch_sampler=train_batch_sampler, num_workers=num_workers,
             collate_fn=tv_utils.collate_fn)
-
         data_loader_test = torch.utils.data.DataLoader(
             dataset_test, batch_size=1,
             sampler=test_sampler, num_workers=num_workers,
             collate_fn=tv_utils.collate_fn)
 
-        model = torchvision.models.detection.__dict__[self.backend_opts.model_arch](
-            num_classes=num_classes, pretrained=True)
+        # Setup model and train it.
+        from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
+        model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=True)
+        in_features = model.roi_heads.box_predictor.cls_score.in_features
+        model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
         model.to(self.device)
 
         model_without_ddp = model
         params = [p for p in model.parameters() if p.requires_grad]
         optimizer = torch.optim.SGD(
-            params, lr=self.backend_opts.lr, momentum=0.9, weight_decay=1e-4)
+            params, lr=self.train_opts.lr, momentum=0.9, weight_decay=1e-4)
         # effectively use fixed LR scheduler
         lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(
-            optimizer, milestones=self.backend_opts.num_epochs, gamma=0.1)
+            optimizer, milestones=[self.train_opts.num_epochs], gamma=0.1)
 
-        for epoch in range(self.backend_opts.num_epochs):
+        for epoch in range(self.train_opts.num_epochs):
             print_freq = 20
             train_one_epoch(model, optimizer, data_loader, self.device, epoch,
                             print_freq)
@@ -264,7 +280,7 @@ class ObjectDetectionBackend(Backend):
                     'model': model_without_ddp.state_dict(),
                     'optimizer': optimizer.state_dict(),
                     'lr_scheduler': lr_scheduler.state_dict(),
-                    'args': self.backend_opts},
+                    'args': self.train_opts},
                     join(train_dir, 'model_{}.pth'.format(epoch)))
 
             # evaluate after every epoch

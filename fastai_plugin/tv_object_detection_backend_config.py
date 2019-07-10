@@ -44,7 +44,7 @@ class ObjectDetectionBackendConfigBuilder(SimpleBackendConfigBuilder):
             batch_sz=8,
             lr=1e-4,
             num_epochs=5,
-            model_arch='resnet18',
+            model_arch='maskrcnn_resnet50_fpn',
             sync_interval=1,
             debug=False):
         b = deepcopy(self)
