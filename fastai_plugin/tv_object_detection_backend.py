@@ -31,6 +31,9 @@ from fastai_plugin.utils import (
 from fastai_plugin.retinanet import (
     create_body, RetinaNet, RetinaNetFocalLoss, retina_net_split,
     get_predictions, show_results)
+import torchvision
+from torchvision_refs.detection.engine import train_one_epoch, evaluate
+import torchvision_refs.detection.utils as tv_utils
 
 
 def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
@@ -53,44 +56,14 @@ def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
     _make_debug_chips('val')
 
 
-from fastai.torch_core import *
-from fastai.basic_data import *
-from fastai.callback import *
-from torch import nn
-def loss_batch(model:nn.Module, xb:Tensor, yb:Tensor, loss_func:OptLossFunc=None, opt:OptOptimizer=None,
-               cb_handler:Optional[CallbackHandler]=None)->Tuple[Union[Tensor,int,float,str]]:
-    "Calculate loss and metrics for a batch, call out to callbacks as necessary."
-    cb_handler = ifnone(cb_handler, CallbackHandler())
-    images = xb
-
-    # XXX forcing model to be in training model so we can get the loss for both
-    # the training and validation datasets
-    model.train()
-    batch_sz = len(xb)
-    targets = []
-    for i in range(batch_sz):
-        targets.append({
-            'boxes': yb[0][i],
-            'labels': yb[1][i]
-        })
-    loss_dict = model(images, targets)
-    loss = sum(loss for loss in loss_dict.values())
-
-    if opt is not None:
-        loss,skip_bwd = cb_handler.on_backward_begin(loss)
-        if not skip_bwd:                     loss.backward()
-        if not cb_handler.on_backward_end(): opt.step()
-        if not cb_handler.on_step_end():     opt.zero_grad()
-
-    return loss.detach().cpu()
-
-
 class ObjectDetectionBackend(Backend):
     def __init__(self, task_config, backend_opts, train_opts):
         self.task_config = task_config
         self.backend_opts = backend_opts
         self.train_opts = train_opts
         self.inf_learner = None
+
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     def print_options(self):
         # TODO get logging to work for plugins
@@ -120,7 +93,6 @@ class ObjectDetectionBackend(Backend):
             backend-specific data-structures consumed by backend's
             process_sceneset_results
         """
-
         scene_dir = join(tmp_dir, str(scene.id))
         labels_path = join(scene_dir, '{}-labels.json'.format(scene.id))
 
@@ -251,48 +223,52 @@ class ObjectDetectionBackend(Backend):
             make_debug_chips(
                 data, self.task_config.class_map, tmp_dir, train_uri)
 
-        # Setup callbacks and train model.
+        # TODO data loader stuff
+        dataset = None
+        dataset_test = None
+        num_classes = None
 
-        # Hack torchvision model so it works with fastai.
-        num_classes = data.c
-        from torchvision.models.detection import fasterrcnn_resnet50_fpn
-        model = fasterrcnn_resnet50_fpn(
-            pretrained=False, progress=True, num_classes=num_classes,
-            pretrained_backbone=True, min_size=300, max_size=300)
-        learn = Learner(data, model, path=train_dir)
-        learn.unfreeze()
-        import fastai
-        fastai.basic_train.loss_batch = loss_batch
+        train_sampler = torch.utils.data.RandomSampler(dataset)
+        test_sampler = torch.utils.data.SequentialSampler(dataset_test)
+        train_batch_sampler = torch.utils.data.BatchSampler(
+            train_sampler, self.backend_opts.batch_sz, drop_last=True)
 
-        model_path = get_local_path(self.backend_opts.model_uri, tmp_dir)
+        data_loader = torch.utils.data.DataLoader(
+            dataset, batch_sampler=train_batch_sampler, num_workers=num_workers,
+            collate_fn=tv_utils.collate_fn)
 
-        pretrained_uri = self.backend_opts.pretrained_uri
-        if pretrained_uri:
-            print('Loading weights from pretrained_uri: {}'.format(
-                pretrained_uri))
-            pretrained_path = download_if_needed(pretrained_uri, tmp_dir)
-            learn.load(pretrained_path[:-4])
+        data_loader_test = torch.utils.data.DataLoader(
+            dataset_test, batch_size=1,
+            sampler=test_sampler, num_workers=num_workers,
+            collate_fn=tv_utils.collate_fn)
 
-        callbacks = [
-            TrackEpochCallback(learn),
-            MySaveModelCallback(learn, every='epoch'),
-            MyCSVLogger(learn, filename='log'),
-            ExportCallback(learn, model_path, monitor='valid_loss'),
-            SyncCallback(train_dir, self.backend_opts.train_uri,
-                         self.train_opts.sync_interval)
-        ]
+        model = torchvision.models.detection.__dict__[self.backend_opts.model_arch](
+            num_classes=num_classes, pretrained=True)
+        model.to(self.device)
 
-        lr = self.train_opts.lr
-        num_epochs = self.train_opts.num_epochs
-        if self.train_opts.one_cycle:
-            if lr is None:
-                learn.lr_find()
-                learn.recorder.plot(suggestion=True, return_fig=True)
-                lr = learn.recorder.min_grad_lr
-                print('lr_find() found lr: {}'.format(lr))
-            learn.fit_one_cycle(num_epochs, lr, callbacks=callbacks)
-        else:
-            learn.fit(num_epochs, lr, callbacks=callbacks)
+        model_without_ddp = model
+        params = [p for p in model.parameters() if p.requires_grad]
+        optimizer = torch.optim.SGD(
+            params, lr=self.backend_opts.lr, momentum=0.9, weight_decay=1e-4)
+        # effectively use fixed LR scheduler
+        lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(
+            optimizer, milestones=self.backend_opts.num_epochs, gamma=0.1)
+
+        for epoch in range(self.backend_opts.num_epochs):
+            print_freq = 20
+            train_one_epoch(model, optimizer, data_loader, self.device, epoch,
+                            print_freq)
+            lr_scheduler.step()
+            if train_dir:
+                tv_utils.save_on_master({
+                    'model': model_without_ddp.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'lr_scheduler': lr_scheduler.state_dict(),
+                    'args': self.backend_opts},
+                    join(train_dir, 'model_{}.pth'.format(epoch)))
+
+            # evaluate after every epoch
+            evaluate(model, data_loader_test, device=self.device)
 
         # Since model is exported every epoch, we need some other way to
         # show that training is finished.
@@ -310,7 +286,6 @@ class ObjectDetectionBackend(Backend):
             model_path = download_if_needed(model_uri, tmp_dir)
             self.inf_learner = load_learner(
                 dirname(model_path), basename(model_path))
-            self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     def predict(self, chips, windows, tmp_dir):
         """Return predictions for a chip using model.
