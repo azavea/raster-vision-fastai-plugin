@@ -4,6 +4,9 @@ import zipfile
 import glob
 from pathlib import Path
 import random
+import re
+import os
+import shutil
 
 import matplotlib
 matplotlib.use("Agg")
@@ -25,6 +28,7 @@ from rastervision.utils.misc import save_img
 from rastervision.backend import Backend
 from rastervision.data import ObjectDetectionLabels
 
+from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from fastai_plugin.utils import (
     SyncCallback, MySaveModelCallback, ExportCallback, MyCSVLogger,
     Precision, Recall, FBeta, zipdir)
@@ -57,13 +61,63 @@ def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
     _make_debug_chips('val')
 
 
+class TVDataset(torch.utils.data.Dataset):
+    def __init__(self, fastai_ds):
+        self.fastai_ds = fastai_ds
+
+    def __getitem__(self, idx):
+        x, y = self.fastai_ds[idx]
+        boxes = y.data[0]
+        num_objs = boxes.shape[0]
+        labels = torch.from_numpy(y.data[1])
+        # convert from (ymin, xmin, ymax, xmax) to (xmin, ymin, xmax, ymax)
+        boxes = torch.cat((
+            boxes[:, 1:2], boxes[:, 0:1], boxes[:, 3:4], boxes[:, 2:3]), dim=1)
+
+        target = {
+            'boxes': boxes,
+            'labels': labels,
+            'image_id': torch.tensor([idx]),
+            'area': (boxes[:, 3] - boxes[:, 1]) * (boxes[:, 2] - boxes[:, 0]),
+            'iscrowd': torch.zeros((num_objs,), dtype=torch.int64)
+        }
+
+        return x.data, target
+
+    def __len__(self):
+        return len(self.fastai_ds)
+
+
+def get_model(num_classes, chip_size=300):
+    model = torchvision.models.detection.fasterrcnn_resnet50_fpn(
+        pretrained=True, min_size=300, max_size=300)
+    in_features = model.roi_heads.box_predictor.cls_score.in_features
+    model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+    return model
+
+
+def get_last_checkpoint_path(train_dir):
+    model_paths = glob.glob(join(train_dir, 'model*.pth'))
+    model_ids = []
+    for model_path in model_paths:
+        match = re.match(r'model_(\d+).pth',
+                         os.path.basename(model_path))
+        model_ids.append(int(match.group(1)))
+
+    if len(model_ids) == 0:
+        return None
+    model_id = max(model_ids)
+    model_path = join(
+        train_dir, 'model_{}.pth'.format(model_id))
+    return model_path
+
+
 class ObjectDetectionBackend(Backend):
     def __init__(self, task_config, backend_opts, train_opts):
         self.task_config = task_config
         self.backend_opts = backend_opts
         self.train_opts = train_opts
-        self.inf_learner = None
-
+        self.model = None
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     def print_options(self):
@@ -224,49 +278,8 @@ class ObjectDetectionBackend(Backend):
             make_debug_chips(
                 data, self.task_config.class_map, tmp_dir, train_uri)
 
-        dataset = data.train_ds
-        dataset_test = data.valid_ds
-
-        # Wacky monkey patching operation to make fastai Dataset return things
-        # in the right format.
-        def fastai_to_tv(x, y):
-            # TODO set image_id somehow
-            image_id = 'null'
-            target = {
-                'boxes': y.data[0],
-                'labels': y.data[1],
-                'image_id': image_id,
-                'area': x.data.shape[1] * x.data.shape[2]
-            }
-            return x.data, target
-
-        x, y = dataset[0]
-        x, target = fastai_to_tv(x, y)
-
-        import types
-        def make_getitem(ds):
-            old_getitem = ds.__getitem__
-            def getitem(self, ind):
-                return fastai_to_tv(*old_getitem(ind))
-            return getitem
-
-        dataset.__getitem__ = types.MethodType(
-            make_getitem(dataset), dataset)
-        dataset_test.__getitem__ = types.MethodType(
-            make_getitem(dataset_test), dataset_test)
-
-        class Test():
-            def __getitem__(self, ind):
-                return ind
-
-        t = Test()
-        out = t[3]
-
-        def new_getitem(self, ind):
-            return ind + 1
-        t.__getitem__ = types.MethodType(new_getitem, t)
-
-        out = t[3]
+        dataset = TVDataset(data.train_ds)
+        dataset_test = TVDataset(data.valid_ds)
 
         num_classes = data.c
         train_sampler = torch.utils.data.RandomSampler(dataset)
@@ -282,13 +295,12 @@ class ObjectDetectionBackend(Backend):
             collate_fn=tv_utils.collate_fn)
 
         # Setup model and train it.
-        from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
-        model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=True)
-        in_features = model.roi_heads.box_predictor.cls_score.in_features
-        model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+        model_path = get_local_path(self.backend_opts.model_uri, tmp_dir)
+        print(self.backend_opts.model_uri)
+        model = get_model(num_classes)
         model.to(self.device)
-
         model_without_ddp = model
+
         params = [p for p in model.parameters() if p.requires_grad]
         optimizer = torch.optim.SGD(
             params, lr=self.train_opts.lr, momentum=0.9, weight_decay=1e-4)
@@ -312,6 +324,10 @@ class ObjectDetectionBackend(Backend):
             # evaluate after every epoch
             evaluate(model, data_loader_test, device=self.device)
 
+            # copy latest checkpoint to standard model path
+            checkpoint_path = get_last_checkpoint_path(train_dir)
+            shutil.copyfile(checkpoint_path, model_path)
+
         # Since model is exported every epoch, we need some other way to
         # show that training is finished.
         str_to_file('done!', self.backend_opts.train_done_uri)
@@ -321,13 +337,17 @@ class ObjectDetectionBackend(Backend):
 
     def load_model(self, tmp_dir):
         """Load the model in preparation for one or more prediction calls."""
-        if self.inf_learner is None:
+        if self.model is None:
             self.print_options()
-            # XXX
-            model_uri = self.backend_opts.model_uri + '.pth'
+            model_uri = self.backend_opts.model_uri
             model_path = download_if_needed(model_uri, tmp_dir)
-            self.inf_learner = load_learner(
-                dirname(model_path), basename(model_path))
+            checkpoint = torch.load(model_path, map_location='cpu')
+            # add one for background class
+            num_classes = len(self.task_config.class_map) + 1
+            model = get_model(num_classes)
+            model.load_state_dict(checkpoint['model'])
+            model = model.to(self.device)
+            self.model = model
 
     def predict(self, chips, windows, tmp_dir):
         """Return predictions for a chip using model.
@@ -343,31 +363,22 @@ class ObjectDetectionBackend(Backend):
         labels = ObjectDetectionLabels.make_empty()
         chips = torch.Tensor(chips).permute((0, 3, 1, 2)) / 255.
         chips = chips.to(self.device)
-        model = self.inf_learner.model.eval()
-
+        model = self.model.eval()
         output = model(chips)
 
         for chip_ind, (chip, window) in enumerate(zip(chips, windows)):
-            boxes, class_ids, scores = get_predictions(
-                output, chip_ind, detect_thresh=0.2)
-            if isinstance(boxes, torch.Tensor):
-                boxes = boxes.cpu()
-                class_ids = class_ids.cpu()
-                scores = scores.cpu()
-                t_sz = torch.Tensor([window.get_height(), window.get_width()])[None].float()
-                boxes[:,:2] = boxes[:,:2] - boxes[:,2:]/2
-                boxes[:,:2] = (boxes[:,:2] + 1) * t_sz/2
-                boxes[:,2:] = boxes[:,2:] * t_sz
-                boxes[:, 2:4] = boxes[:, 0:2] + boxes[:, 2:4] / 2
+            chip_output = output[chip_ind]
+            boxes = chip_output['boxes'].detach().numpy().astype(np.float)
+            class_ids = chip_output['labels'].detach().numpy()
+            scores = chip_output['scores'].detach().numpy()
 
-                boxes = boxes.detach().numpy().astype(np.float)
-                class_ids = class_ids.detach().numpy()
-                scores = scores.detach().numpy()
-
-                boxes = ObjectDetectionLabels.local_to_global(
-                    boxes, window)
-                class_ids = class_ids.astype(np.int32) + 1
-                labels = (labels + ObjectDetectionLabels(
-                    boxes, class_ids, scores=scores))
+            # convert from (xmin, ymin, xmax, ymax) to (ymin, xmin, ymax, xmax)
+            boxes = np.hstack((
+                boxes[:, 1:2], boxes[:, 0:1], boxes[:, 3:4], boxes[:, 2:3]))
+            boxes = ObjectDetectionLabels.local_to_global(
+                boxes, window)
+            class_ids = class_ids.astype(np.int32)
+            labels = (labels + ObjectDetectionLabels(
+                boxes, class_ids, scores=scores))
 
         return labels
