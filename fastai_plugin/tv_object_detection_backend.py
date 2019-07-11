@@ -227,8 +227,10 @@ class ObjectDetectionBackend(Backend):
         dataset = data.train_ds
         dataset_test = data.valid_ds
 
+        # Wacky monkey patching operation to make fastai Dataset return things
+        # in the right format.
         def fastai_to_tv(x, y):
-            # TODO
+            # TODO set image_id somehow
             image_id = 'null'
             target = {
                 'boxes': y[0],
@@ -238,11 +240,17 @@ class ObjectDetectionBackend(Backend):
             }
             return x.data, target
 
-        # TODO monkey patch __getitem__ to use fastai_to_tv
-        # dataset.__getitem__ = (
+        import types
+        def make_getitem(ds):
+            def getitem(ind):
+                return fastai_to_tv(*ds.__getitem__(ind))
+            return getitem
+        dataset.__getitem__ = types.MethodType(
+            make_getitem(dataset), dataset)
+        dataset_test.__getitem__ = types.MethodType(
+            make_getitem(dataset_test), dataset_test)
 
         num_classes = data.c
-
         train_sampler = torch.utils.data.RandomSampler(dataset)
         test_sampler = torch.utils.data.SequentialSampler(dataset_test)
         train_batch_sampler = torch.utils.data.BatchSampler(
