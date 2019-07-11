@@ -233,22 +233,40 @@ class ObjectDetectionBackend(Backend):
             # TODO set image_id somehow
             image_id = 'null'
             target = {
-                'boxes': y[0],
-                'labels': y[1],
+                'boxes': y.data[0],
+                'labels': y.data[1],
                 'image_id': image_id,
                 'area': x.data.shape[1] * x.data.shape[2]
             }
             return x.data, target
 
+        x, y = dataset[0]
+        x, target = fastai_to_tv(x, y)
+
         import types
         def make_getitem(ds):
-            def getitem(ind):
-                return fastai_to_tv(*ds.__getitem__(ind))
+            old_getitem = ds.__getitem__
+            def getitem(self, ind):
+                return fastai_to_tv(*old_getitem(ind))
             return getitem
+
         dataset.__getitem__ = types.MethodType(
             make_getitem(dataset), dataset)
         dataset_test.__getitem__ = types.MethodType(
             make_getitem(dataset_test), dataset_test)
+
+        class Test():
+            def __getitem__(self, ind):
+                return ind
+
+        t = Test()
+        out = t[3]
+
+        def new_getitem(self, ind):
+            return ind + 1
+        t.__getitem__ = types.MethodType(new_getitem, t)
+
+        out = t[3]
 
         num_classes = data.c
         train_sampler = torch.utils.data.RandomSampler(dataset)
