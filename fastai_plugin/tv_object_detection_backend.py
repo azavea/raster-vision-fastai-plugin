@@ -314,12 +314,15 @@ class ObjectDetectionBackend(Backend):
         """Load the model in preparation for one or more prediction calls."""
         if self.inf_learner is None:
             self.print_options()
-            # XXX
-            model_uri = self.backend_opts.model_uri + '.pth'
+            model_uri = self.backend_opts.model_uri
             model_path = download_if_needed(model_uri, tmp_dir)
-            self.inf_learner = load_learner(
-                dirname(model_path), basename(model_path))
-            self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+            checkpoint = torch.load(model_path, map_location='cpu')
+            # add one for background class
+            num_classes = len(self.task_config.class_map) + 1
+            model = get_model(num_classes)
+            model.load_state_dict(checkpoint['model'])
+            model = model.to(self.device)
+            self.model = model
 
     def predict(self, chips, windows, tmp_dir):
         """Return predictions for a chip using model.
@@ -335,32 +338,22 @@ class ObjectDetectionBackend(Backend):
         labels = ObjectDetectionLabels.make_empty()
         chips = torch.Tensor(chips).permute((0, 3, 1, 2)) / 255.
         chips = chips.to(self.device)
-        model = self.inf_learner.model.eval()
-
+        model = self.model.eval()
         output = model(chips)
 
         for chip_ind, (chip, window) in enumerate(zip(chips, windows)):
-            boxes, class_ids, scores = get_predictions(
-                output, chip_ind, detect_thresh=0.2)
-            if isinstance(boxes, torch.Tensor):
-                # TODO copy stuff from other branch
-                boxes = boxes.cpu()
-                class_ids = class_ids.cpu()
-                scores = scores.cpu()
-                t_sz = torch.Tensor([window.get_height(), window.get_width()])[None].float()
-                boxes[:,:2] = boxes[:,:2] - boxes[:,2:]/2
-                boxes[:,:2] = (boxes[:,:2] + 1) * t_sz/2
-                boxes[:,2:] = boxes[:,2:] * t_sz
-                boxes[:, 2:4] = boxes[:, 0:2] + boxes[:, 2:4] / 2
+            chip_output = output[chip_ind]
+            boxes = chip_output['boxes'].detach().numpy().astype(np.float)
+            class_ids = chip_output['labels'].detach().numpy()
+            scores = chip_output['scores'].detach().numpy()
 
-                boxes = boxes.detach().numpy().astype(np.float)
-                class_ids = class_ids.detach().numpy()
-                scores = scores.detach().numpy()
-
-                boxes = ObjectDetectionLabels.local_to_global(
-                    boxes, window)
-                class_ids = class_ids.astype(np.int32) + 1
-                labels = (labels + ObjectDetectionLabels(
-                    boxes, class_ids, scores=scores))
+            # convert from (xmin, ymin, xmax, ymax) to (ymin, xmin, ymax, xmax)
+            boxes = np.hstack((
+                boxes[:, 1:2], boxes[:, 0:1], boxes[:, 3:4], boxes[:, 2:3]))
+            boxes = ObjectDetectionLabels.local_to_global(
+                boxes, window)
+            class_ids = class_ids.astype(np.int32)
+            labels = (labels + ObjectDetectionLabels(
+                boxes, class_ids, scores=scores))
 
         return labels
