@@ -61,20 +61,31 @@ def loss_batch(model:nn.Module, xb:Tensor, yb:Tensor, loss_func:OptLossFunc=None
                cb_handler:Optional[CallbackHandler]=None)->Tuple[Union[Tensor,int,float,str]]:
     "Calculate loss and metrics for a batch, call out to callbacks as necessary."
     cb_handler = ifnone(cb_handler, CallbackHandler())
-    images = xb
 
-    # XXX forcing model to be in training model so we can get the loss for both
-    # the training and validation datasets
-    model.train()
+    # Translate from fastai format to torchvision. There's probably a better
+    # place to put this.
     batch_sz = len(xb)
+    images = xb
     targets = []
     for i in range(batch_sz):
         targets.append({
             'boxes': yb[0][i],
             'labels': yb[1][i]
         })
-    loss_dict = model(images, targets)
-    loss = sum(loss for loss in loss_dict.values())
+
+    # torchvision is such that it can only compute losses in training mode,
+    # and only output in eval mode. So we have to set some things to null
+    # values. This isn't ideal and will break some callbacks but I'm not
+    # sure how else to handle it at the moment.
+    if model.training:
+        loss_dict = model(images, targets)
+        out = None
+        loss = sum(loss for loss in loss_dict.values())
+    else:
+        out = model(images)
+        loss = torch.Tensor([0.0])
+
+    out = cb_handler.on_loss_begin(out)
 
     if opt is not None:
         loss,skip_bwd = cb_handler.on_backward_begin(loss)
@@ -252,8 +263,6 @@ class ObjectDetectionBackend(Backend):
                 data, self.task_config.class_map, tmp_dir, train_uri)
 
         # Setup callbacks and train model.
-
-        # Hack torchvision model so it works with fastai.
         num_classes = data.c
         from torchvision.models.detection import fasterrcnn_resnet50_fpn
         model = fasterrcnn_resnet50_fpn(
@@ -277,7 +286,7 @@ class ObjectDetectionBackend(Backend):
             TrackEpochCallback(learn),
             MySaveModelCallback(learn, every='epoch'),
             MyCSVLogger(learn, filename='log'),
-            ExportCallback(learn, model_path, monitor='valid_loss'),
+            ExportCallback(learn, model_path, monitor='train_loss'), # XXX
             SyncCallback(train_dir, self.backend_opts.train_uri,
                          self.train_opts.sync_interval)
         ]
@@ -334,6 +343,7 @@ class ObjectDetectionBackend(Backend):
             boxes, class_ids, scores = get_predictions(
                 output, chip_ind, detect_thresh=0.2)
             if isinstance(boxes, torch.Tensor):
+                # TODO copy stuff from other branch
                 boxes = boxes.cpu()
                 class_ids = class_ids.cpu()
                 scores = scores.cpu()
