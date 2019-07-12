@@ -101,7 +101,8 @@ class ObjectDetectionBackend(Backend):
         self.task_config = task_config
         self.backend_opts = backend_opts
         self.train_opts = train_opts
-        self.inf_learner = None
+        self.model = None
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     def print_options(self):
         # TODO get logging to work for plugins
@@ -312,14 +313,18 @@ class ObjectDetectionBackend(Backend):
 
     def load_model(self, tmp_dir):
         """Load the model in preparation for one or more prediction calls."""
-        if self.inf_learner is None:
+        if self.model is None:
             self.print_options()
             model_uri = self.backend_opts.model_uri
             model_path = download_if_needed(model_uri, tmp_dir)
             checkpoint = torch.load(model_path, map_location='cpu')
             # add one for background class
             num_classes = len(self.task_config.class_map) + 1
-            model = get_model(num_classes)
+
+            from torchvision.models.detection import fasterrcnn_resnet50_fpn
+            model = fasterrcnn_resnet50_fpn(
+                pretrained=False, progress=True, num_classes=num_classes,
+                pretrained_backbone=True, min_size=300, max_size=300)
             model.load_state_dict(checkpoint['model'])
             model = model.to(self.device)
             self.model = model
@@ -343,9 +348,9 @@ class ObjectDetectionBackend(Backend):
 
         for chip_ind, (chip, window) in enumerate(zip(chips, windows)):
             chip_output = output[chip_ind]
-            boxes = chip_output['boxes'].detach().numpy().astype(np.float)
-            class_ids = chip_output['labels'].detach().numpy()
-            scores = chip_output['scores'].detach().numpy()
+            boxes = chip_output['boxes'].numpy().astype(np.float)
+            class_ids = chip_output['labels'].numpy()
+            scores = chip_output['scores'].numpy()
 
             # convert from (xmin, ymin, xmax, ymax) to (ymin, xmin, ymax, xmax)
             boxes = np.hstack((

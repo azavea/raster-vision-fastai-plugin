@@ -6,6 +6,7 @@ import zipfile
 import collections
 import json
 from typing import Any
+import shutil
 
 from fastai.core import ifnone
 from fastai.callbacks import CSVLogger, Callback, SaveModelCallback, TrackerCallback
@@ -48,7 +49,7 @@ class ExportCallback(TrackerCallback):
             # XXX switch to using save
             # self.learn.export(self.model_path)
             self.learn.save(self.model_path)
-
+            shutil.mv(self.model_path + '.pth', self.model_path)
 
 class MySaveModelCallback(SaveModelCallback):
     """Saves the model after each epoch to potentially resume training.

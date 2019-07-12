@@ -21,8 +21,8 @@ class CowcObjectDetectionExperiments(rv.ExperimentSet):
         """
         test = str_to_bool(test)
         exp_id = 'cowc-object-detection'
-        num_epochs = 20
-        batch_sz = 16
+        num_epochs = 10
+        batch_sz = 8
         debug = False
         lr = 1e-4
         model_arch = 'resnet18'
