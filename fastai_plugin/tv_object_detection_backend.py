@@ -4,6 +4,7 @@ import zipfile
 import glob
 from pathlib import Path
 import random
+import collections
 
 import matplotlib
 matplotlib.use("Agg")
@@ -12,7 +13,7 @@ import numpy as np
 import torch
 from fastai.vision import (
     ObjectItemList, bb_pad_collate, get_transforms, models,
-    Image, get_annotations)
+    Image)
 from fastai.callbacks import TrackEpochCallback
 from fastai.basic_train import load_learner, Learner
 
@@ -31,6 +32,36 @@ from fastai_plugin.utils import (
 from fastai_plugin.retinanet import (
     create_body, RetinaNet, RetinaNetFocalLoss, retina_net_split,
     get_predictions, show_results)
+
+
+# Updated this function from fastai so that it doesn't ignore negative chips.
+# Should contribute this upstream, assuming this behavior doesn't break anything.
+import json
+from fastai.core import ifnone
+
+def get_annotations(fname, prefix=None):
+    "Open a COCO style json in `fname` and returns the lists of filenames (with maybe `prefix`) and labelled bboxes."
+    annot_dict = json.load(open(fname))
+    id2images, id2bboxes, id2cats = {}, collections.defaultdict(list), collections.defaultdict(list)
+    classes = {}
+    for o in annot_dict['categories']:
+        classes[o['id']] = o['name']
+
+    for o in annot_dict['images']:
+        id2images[o['id']] = ifnone(prefix, '') + o['file_name']
+
+    for o in annot_dict['annotations']:
+        bb = o['bbox']
+        id2bboxes[o['image_id']].append([bb[1],bb[0], bb[3]+bb[1], bb[2]+bb[0]])
+        id2cats[o['image_id']].append(classes[o['category_id']])
+
+    for o in annot_dict['images']:
+        if o['id'] not in id2bboxes:
+            id2bboxes[o['id']] = [[0, 0, 1, 1]]
+            id2cats[o['id']] = ['fake_class']
+
+    ids = list(id2images.keys())
+    return [id2images[k] for k in ids], [[id2bboxes[k], id2cats[k]] for k in ids]
 
 
 def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
@@ -68,10 +99,22 @@ def loss_batch(model:nn.Module, xb:Tensor, yb:Tensor, loss_func:OptLossFunc=None
     images = xb
     targets = []
     for i in range(batch_sz):
+        boxes = yb[0][i]
+        labels = yb[1][i]
+        # convert from (ymin, xmin, ymax, xmax) to (xmin, ymin, xmax, ymax)
+        boxes = torch.cat((
+            boxes[:, 1:2], boxes[:, 0:1], boxes[:, 3:4], boxes[:, 2:3]), dim=1)
+
+        # TODO generalize
+        if 3 in labels:
+            boxes = torch.Tensor([])
+            labels = []
+
         targets.append({
-            'boxes': yb[0][i],
-            'labels': yb[1][i]
+            'boxes': boxes,
+            'labels': labels
         })
+
 
     # torchvision is such that it can only compute losses in training mode,
     # and only output in eval mode. So we have to set some things to null
@@ -283,11 +326,12 @@ class ObjectDetectionBackend(Backend):
             pretrained_path = download_if_needed(pretrained_uri, tmp_dir)
             learn.load(pretrained_path[:-4])
 
+        # TODO add some validation metric and monitor it for doing the export
         callbacks = [
             TrackEpochCallback(learn),
             MySaveModelCallback(learn, every='epoch'),
             MyCSVLogger(learn, filename='log'),
-            ExportCallback(learn, model_path, monitor='train_loss'), # XXX
+            ExportCallback(learn, model_path, monitor='train_loss'),
             SyncCallback(train_dir, self.backend_opts.train_uri,
                          self.train_opts.sync_interval)
         ]
@@ -348,9 +392,9 @@ class ObjectDetectionBackend(Backend):
 
         for chip_ind, (chip, window) in enumerate(zip(chips, windows)):
             chip_output = output[chip_ind]
-            boxes = chip_output['boxes'].numpy().astype(np.float)
-            class_ids = chip_output['labels'].numpy()
-            scores = chip_output['scores'].numpy()
+            boxes = chip_output['boxes'].detach().cpu().numpy().astype(np.float)
+            class_ids = chip_output['labels'].detach().cpu().numpy()
+            scores = chip_output['scores'].detach().cpu().numpy()
 
             # convert from (xmin, ymin, xmax, ymax) to (ymin, xmin, ymax, xmax)
             boxes = np.hstack((

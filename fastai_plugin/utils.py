@@ -49,7 +49,7 @@ class ExportCallback(TrackerCallback):
             # XXX switch to using save
             # self.learn.export(self.model_path)
             self.learn.save(self.model_path)
-            shutil.mv(self.model_path + '.pth', self.model_path)
+            shutil.move(self.model_path + '.pth', self.model_path)
 
 class MySaveModelCallback(SaveModelCallback):
     """Saves the model after each epoch to potentially resume training.
