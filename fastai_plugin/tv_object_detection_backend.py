@@ -1,22 +1,27 @@
-from os.path import join, basename, dirname, isfile
+from os.path import join, basename
 import uuid
 import zipfile
 import glob
 from pathlib import Path
 import random
 import collections
+import json
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from torch import nn, Tensor
+from torchvision.models.detection import fasterrcnn_resnet50_fpn
+import fastai
 from fastai.vision import (
-    ObjectItemList, bb_pad_collate, get_transforms, models,
-    Image)
+    ObjectItemList, bb_pad_collate, get_transforms)
 from fastai.callbacks import TrackEpochCallback
-from fastai.basic_train import load_learner, Learner
-
+from fastai.callback import CallbackHandler
+from fastai.basic_train import Learner
+from fastai.core import ifnone
+from fastai.torch_core import OptLossFunc, OptOptimizer, Optional, Tuple, Union
 
 from rastervision.utils.files import (
     get_local_path, make_dir, upload_or_copy, list_paths,
@@ -28,17 +33,12 @@ from rastervision.data import ObjectDetectionLabels
 
 from fastai_plugin.utils import (
     SyncCallback, MySaveModelCallback, ExportCallback, MyCSVLogger,
-    Precision, Recall, FBeta, zipdir)
-from fastai_plugin.retinanet import (
-    create_body, RetinaNet, RetinaNetFocalLoss, retina_net_split,
-    get_predictions, show_results)
+    zipdir)
 
 
-# Updated this function from fastai so that it doesn't ignore negative chips.
-# Should contribute this upstream, assuming this behavior doesn't break anything.
-import json
-from fastai.core import ifnone
-
+# Updated this function from fastai so that it injects a bogus bounding box
+# with a special label to get around the inability of fastai and torchvision
+# to handle images with no ground truth boxes.
 def get_annotations(fname, prefix=None):
     "Open a COCO style json in `fname` and returns the lists of filenames (with maybe `prefix`) and labelled bboxes."
     annot_dict = json.load(open(fname))
@@ -52,13 +52,15 @@ def get_annotations(fname, prefix=None):
 
     for o in annot_dict['annotations']:
         bb = o['bbox']
-        id2bboxes[o['image_id']].append([bb[1],bb[0], bb[3]+bb[1], bb[2]+bb[0]])
+        id2bboxes[o['image_id']].append(
+            [bb[1], bb[0], bb[3]+bb[1], bb[2]+bb[0]])
         id2cats[o['image_id']].append(classes[o['category_id']])
 
+    # Add a bogus box for each image to ensure that every image has at least
+    # one box.
     for o in annot_dict['images']:
-        if o['id'] not in id2bboxes:
-            id2bboxes[o['id']] = [[0, 0, 1, 1]]
-            id2cats[o['id']] = ['fake_class']
+        id2bboxes[o['id']].append([0, 0, o['height'], o['width']])
+        id2cats[o['id']].append('bogus')
 
     ids = list(id2images.keys())
     return [id2images[k] for k in ids], [[id2bboxes[k], id2cats[k]] for k in ids]
@@ -84,17 +86,13 @@ def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
     _make_debug_chips('val')
 
 
-from fastai.torch_core import *
-from fastai.basic_data import *
-from fastai.callback import *
-from torch import nn
-def loss_batch(model:nn.Module, xb:Tensor, yb:Tensor, loss_func:OptLossFunc=None, opt:OptOptimizer=None,
+def loss_batch(model:nn.Module, xb:Tensor, yb:Tensor, loss_func:OptLossFunc=None,
+               opt:OptOptimizer=None,
                cb_handler:Optional[CallbackHandler]=None)->Tuple[Union[Tensor,int,float,str]]:
     "Calculate loss and metrics for a batch, call out to callbacks as necessary."
     cb_handler = ifnone(cb_handler, CallbackHandler())
 
-    # Translate from fastai format to torchvision. There's probably a better
-    # place to put this.
+    # Translate from fastai box format to torchvision.
     batch_sz = len(xb)
     images = xb
     targets = []
@@ -105,28 +103,22 @@ def loss_batch(model:nn.Module, xb:Tensor, yb:Tensor, loss_func:OptLossFunc=None
         boxes = torch.cat((
             boxes[:, 1:2], boxes[:, 0:1], boxes[:, 3:4], boxes[:, 2:3]), dim=1)
 
-        # TODO generalize
-        if 3 in labels:
-            boxes = torch.Tensor([])
-            labels = []
-
         targets.append({
             'boxes': boxes,
             'labels': labels
         })
 
-
-    # torchvision is such that it can only compute losses in training mode,
-    # and only output in eval mode. So we have to set some things to null
+    # torchvision can only compute losses in training mode,
+    # and output in eval mode. So we have to set some things to null
     # values. This isn't ideal and will break some callbacks but I'm not
     # sure how else to handle it at the moment.
+    out = None
+    loss = torch.Tensor([0.0])
     if model.training:
         loss_dict = model(images, targets)
-        out = None
         loss = sum(loss for loss in loss_dict.values())
     else:
         out = model(images)
-        loss = torch.Tensor([0.0])
 
     out = cb_handler.on_loss_begin(out)
 
@@ -184,7 +176,9 @@ class ObjectDetectionBackend(Backend):
         annotations = []
         categories = [{'id': item.id, 'name': item.name}
                       for item in self.task_config.class_map.get_items()]
-
+        # Add bogus class for handling images with no ground truth boxes.
+        # See get_annotations function above.
+        categories.append({'id': len(categories)+1, 'name': 'bogus'})
         for im_ind, (chip, window, labels) in enumerate(data):
             im_id = '{}-{}'.format(scene.id, im_ind)
             fn = '{}.png'.format(im_id)
@@ -308,15 +302,13 @@ class ObjectDetectionBackend(Backend):
 
         # Setup callbacks and train model.
         num_classes = data.c
-        from torchvision.models.detection import fasterrcnn_resnet50_fpn
         model = fasterrcnn_resnet50_fpn(
             pretrained=False, progress=True, num_classes=num_classes,
             pretrained_backbone=True, min_size=300, max_size=300)
         learn = Learner(data, model, path=train_dir)
         learn.unfreeze()
-        import fastai
-        fastai.basic_train.loss_batch = loss_batch
 
+        fastai.basic_train.loss_batch = loss_batch
         model_path = get_local_path(self.backend_opts.model_uri, tmp_dir)
 
         pretrained_uri = self.backend_opts.pretrained_uri
@@ -362,16 +354,14 @@ class ObjectDetectionBackend(Backend):
             model_uri = self.backend_opts.model_uri
             model_path = download_if_needed(model_uri, tmp_dir)
             checkpoint = torch.load(model_path, map_location='cpu')
-            # add one for background class
-            num_classes = len(self.task_config.class_map) + 1
-
-            from torchvision.models.detection import fasterrcnn_resnet50_fpn
+            # add 2 for background and bogus classes
+            num_classes = len(self.task_config.class_map) + 2
             model = fasterrcnn_resnet50_fpn(
                 pretrained=False, progress=True, num_classes=num_classes,
                 pretrained_backbone=True, min_size=300, max_size=300)
             model.load_state_dict(checkpoint['model'])
             model = model.to(self.device)
-            self.model = model
+            self.model = model.eval()
 
     def predict(self, chips, windows, tmp_dir):
         """Return predictions for a chip using model.
@@ -387,8 +377,9 @@ class ObjectDetectionBackend(Backend):
         labels = ObjectDetectionLabels.make_empty()
         chips = torch.Tensor(chips).permute((0, 3, 1, 2)) / 255.
         chips = chips.to(self.device)
-        model = self.model.eval()
-        output = model(chips)
+        output = self.model(chips)
+
+        bogus_id = len(self.task_config.class_map) + 1
 
         for chip_ind, (chip, window) in enumerate(zip(chips, windows)):
             chip_output = output[chip_ind]
@@ -396,12 +387,19 @@ class ObjectDetectionBackend(Backend):
             class_ids = chip_output['labels'].detach().cpu().numpy()
             scores = chip_output['scores'].detach().cpu().numpy()
 
+            # Remove any bogus boxes.
+            good_inds = class_ids != bogus_id
+            boxes = boxes[good_inds]
+            class_ids = class_ids[good_inds]
+            scores = scores[good_inds]
+
             # convert from (xmin, ymin, xmax, ymax) to (ymin, xmin, ymax, xmax)
             boxes = np.hstack((
                 boxes[:, 1:2], boxes[:, 0:1], boxes[:, 3:4], boxes[:, 2:3]))
             boxes = ObjectDetectionLabels.local_to_global(
                 boxes, window)
             class_ids = class_ids.astype(np.int32)
+
             labels = (labels + ObjectDetectionLabels(
                 boxes, class_ids, scores=scores))
 

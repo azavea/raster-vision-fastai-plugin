@@ -40,12 +40,10 @@ class CowcObjectDetectionExperiments(rv.ExperimentSet):
             train_scene_ids = train_scene_ids[0:1]
             val_scene_ids = val_scene_ids[0:1]
 
-        # XXX set neg_ratio to 0 for testing purposes
-        # since fastai can't handle neg chips afaik.
         task = rv.TaskConfig.builder(rv.OBJECT_DETECTION) \
                             .with_chip_size(300) \
                             .with_classes({'vehicle': (1, 'red')}) \
-                            .with_chip_options(neg_ratio=0.0,
+                            .with_chip_options(neg_ratio=1.0,
                                                ioa_thresh=0.8) \
                             .with_predict_options(merge_thresh=0.3,
                                                   score_thresh=0.5) \
