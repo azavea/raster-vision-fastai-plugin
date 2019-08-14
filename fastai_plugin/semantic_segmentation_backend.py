@@ -35,7 +35,7 @@ def semseg_acc(input, target):
     pass
 
 
-def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
+def make_debug_chips(data, class_map, tmp_dir, train_uri, max_count=30):
     """Save debug chips for a fastai DataBunch.
 
     This saves a plot for each example in the training and validation sets into
@@ -47,7 +47,8 @@ def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
         class_map: (rv.ClassMap) class map used to map class ids to colors
         tmp_dir: (str) path to temp directory
         train_uri: (str) URI of root of training output
-        debug_prob: (float) probability of saving a debug plot for each example
+        max_count: (int) maximum number of chips to generate. If None,
+            generates all of them.
     """
     if 0 in class_map.get_keys():
         colors = [class_map.get_by_id(i).color
@@ -74,19 +75,25 @@ def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
             for x, y in zip(x_batch, y_batch):
                 x = x.squeeze()
                 y = y.squeeze()
-                if random.uniform(0, 1) < debug_prob:
-                    # fastai has an x.show(y=y) method, but we need to plot the
-                    # debug chips ourselves in order to use
-                    # a custom color map that matches the colors in the class_map.
-                    # This could be a good things to contribute upstream to fastai.
-                    plt.axis('off')
-                    plt.imshow(x.data.permute((1, 2, 0)).numpy())
-                    plt.imshow(y.data.squeeze().numpy(), alpha=0.4, vmin=0,
-                               vmax=len(colors), cmap=cmap)
-                    plt.savefig(join(debug_chips_dir, '{}.png'.format(i)),
-                                figsize=(3, 3))
-                    plt.close()
-                    i += 1
+
+                # fastai has an x.show(y=y) method, but we need to plot the
+                # debug chips ourselves in order to use
+                # a custom color map that matches the colors in the class_map.
+                # This could be a good things to contribute upstream to fastai.
+                plt.axis('off')
+                plt.imshow(x.data.permute((1, 2, 0)).numpy())
+                plt.imshow(y.data.squeeze().numpy(), alpha=0.4, vmin=0,
+                            vmax=len(colors), cmap=cmap)
+                plt.savefig(join(debug_chips_dir, '{}.png'.format(i)),
+                            figsize=(3, 3))
+                plt.close()
+                i += 1
+
+                if i > max_count:
+                    break
+            if i > max_count:
+                break
+
         zipdir(debug_chips_dir, zip_path)
         upload_or_copy(zip_path, zip_uri)
 
