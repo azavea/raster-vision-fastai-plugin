@@ -34,6 +34,7 @@ Options:
 --gpu use the NVIDIA runtime and GPU image
 --name sets the name of the running container
 --jupyter forwards port 8888, mounts ./notebooks to /opt/notebooks, and runs Jupyter
+--debug maps port 3004 on localhost to 3000 inside container
 
 All arguments after above options are passed to 'docker run'.
 "
@@ -77,7 +78,7 @@ do
         shift
         ;;
         --debug)
-        DEBUG="-p 3000:3000"
+        DEBUG="-p 3004:3000"
         shift
         ;;
         *) # unknown option
