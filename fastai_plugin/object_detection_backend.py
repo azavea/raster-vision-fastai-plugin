@@ -25,7 +25,7 @@ from rastervision.backend import Backend
 from rastervision.data import ObjectDetectionLabels
 
 from fastai_plugin.utils import (
-    SyncCallback, ExportCallback, MyCSVLogger, get_last_epoch,
+    SyncCallback, ExportCallback, MyCSVLogger,
     Precision, Recall, FBeta, zipdir)
 from fastai_plugin.retinanet import (
     create_body, RetinaNet, RetinaNetFocalLoss, retina_net_split,
