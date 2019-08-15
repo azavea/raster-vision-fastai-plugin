@@ -39,6 +39,20 @@ log = logging.getLogger(__name__)
 
 
 def make_debug_chips(data, class_map, tmp_dir, train_uri, max_count=30):
+    """Save debug chips for a fastai DataBunch.
+
+    This saves a plot for each example in the training and validation sets into
+    train-debug-chips.zip and valid-debug-chips.zip under the train_uri. This
+    is useful for making sure we are feeding correct data into the model.
+
+    Args:
+        data: fastai DataBunch for a semantic segmentation dataset
+        class_map: (rv.ClassMap) class map used to map class ids to colors
+        tmp_dir: (str) path to temp directory
+        train_uri: (str) URI of root of training output
+        max_count: (int) maximum number of chips to generate. If None,
+            generates all of them.
+    """
     def _make_debug_chips(split):
         debug_chips_dir = join(tmp_dir, '{}-debug-chips'.format(split))
         zip_path = join(tmp_dir, '{}-debug-chips.zip'.format(split))
@@ -61,27 +75,16 @@ def make_debug_chips(data, class_map, tmp_dir, train_uri, max_count=30):
     _make_debug_chips('val')
 
 
-def merge_class_dirs(scene_class_dirs, output_dir):
-    seen_classes = set([])
-    chip_ind = 0
-    for scene_class_dir in scene_class_dirs:
-        for class_name, src_class_dir in scene_class_dir.items():
-            dst_class_dir = join(output_dir, class_name)
-            if class_name not in seen_classes:
-                make_dir(dst_class_dir)
-                seen_classes.add(class_name)
-
-            for src_class_file in [
-                    join(src_class_dir, class_file)
-                    for class_file in os.listdir(src_class_dir)
-            ]:
-                dst_class_file = join(dst_class_dir, '{}.png'.format(chip_ind))
-                shutil.move(src_class_file, dst_class_file)
-                chip_ind += 1
-
-
 class ChipClassificationBackend(Backend):
+    """Chip classification backend using PyTorch and fastai."""
     def __init__(self, task_config, backend_opts, train_opts):
+        """Constructor.
+
+        Args:
+            task_config: (ChipClassificationBackendConfig)
+            backend_opts: (simple_backend_config.BackendOptions)
+            train_opts: (chip_classification_backend_config.TrainOptions)
+        """
         self.task_config = task_config
         self.backend_opts = backend_opts
         self.train_opts = train_opts
@@ -170,7 +173,15 @@ class ChipClassificationBackend(Backend):
         upload_or_copy(group_path, group_uri)
 
     def train(self, tmp_dir):
-        """Train a model."""
+        """Train a model.
+
+        This downloads any previous output saved to the train_uri,
+        starts training (or resumes from a checkpoint), periodically
+        syncs contents of train_dir to train_uri and after training finishes.
+
+        Args:
+            tmp_dir: (str) path to temp directory
+        """
         self.print_options()
 
         # Sync output of previous training run from cloud.
@@ -199,7 +210,7 @@ class ChipClassificationBackend(Backend):
                 .label_from_folder(classes=classes)
                 .transform(tfms, size=size)
                 .databunch(bs=self.train_opts.batch_sz,
-                            num_workers=num_workers))
+                           num_workers=num_workers))
 
         if self.train_opts.debug:
             make_debug_chips(data, class_map, tmp_dir, train_uri)
@@ -274,14 +285,16 @@ class ChipClassificationBackend(Backend):
             self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     def predict(self, chips, windows, tmp_dir):
-        """Return predictions for a chip using model.
+        """Return predictions for a batch of chips.
 
         Args:
-            chips: [[height, width, channels], ...] numpy array of chips
-            windows: List of boxes that are the windows aligned with the chips.
+            chips: (numpy.ndarray) of shape (n, height, width, nb_channels)
+                containing a batch of chips
+            windows: (List<Box>) windows that are aligned with the chips which
+                are aligned with the chips.
 
         Return:
-            Labels object containing predictions
+            (ChipClassificationLabels) containing predictions
         """
         self.load_model(tmp_dir)
 
@@ -297,7 +310,6 @@ class ChipClassificationBackend(Backend):
         for class_probs, window in zip(preds, windows):
             # Add 1 to class_id since they start at 1.
             class_id = int(class_probs.argmax() + 1)
-
             labels.set_cell(window, class_id, class_probs)
 
         return labels

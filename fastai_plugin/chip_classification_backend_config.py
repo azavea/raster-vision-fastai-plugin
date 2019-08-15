@@ -15,7 +15,6 @@ class TrainOptions():
                  one_cycle=None,
                  num_epochs=None, model_arch=None, fp16=None,
                  flip_vert=None, sync_interval=None, debug=None,
-                 train_prop=None, train_count=None, tta=None, oversample=None):
         self.batch_sz = batch_sz
         self.weight_decay = weight_decay
         self.lr = lr
@@ -56,14 +55,40 @@ class ChipClassificationBackendConfigBuilder(SimpleBackendConfigBuilder):
             fp16=False,
             flip_vert=False,
             sync_interval=1,
-            debug=False):
+            debug=False,
+        """Set options for training models.
 
+        Args:
+            batch_sz: (int) the batch size
+            weight_decay: (float) the weight decay
+            lr: (float or None) the learning rate if using a fixed LR (ie. one_cycle is False),
+                or the maximum LR to use if one_cycle is True,
+                or None if automatic learning rate finder (fastai lr_find)
+                should be used
+            one_cycle: (bool) True if fastai fit_one_cycle should be used. This
+                cycles the LR once during the course of training and seems to
+                result in a pretty consistent improvement. See lr for more
+                details.
+            num_epochs: (int) number of epochs (sweeps through training set) to
+                train model for
+            model_arch: (str) classification model backbone to use for UNet
+                architecture. Any option in torchvision.models is valid, for
+                example, resnet18.
+            fp16: (bool) use mixed-precision training. Ideally, this will make
+                things run 2x fast.
+            flip_vert: (bool) use vertical flips and rotations for data aug
+            sync_interval: (int) sync training directory to cloud every
+                sync_interval epochs.
+            debug: (bool) if True, save debug chips (ie. visualizations of
+                input to model during training) during training and use
+                single-core for creating minibatches.
+        """
         b = deepcopy(self)
         b.train_opts = TrainOptions(
             batch_sz=batch_sz, weight_decay=weight_decay, lr=lr,
             one_cycle=one_cycle,
             num_epochs=num_epochs, model_arch=model_arch, fp16=fp16,
-            flip_vert=flip_vert, sync_interval=sync_interval, debug=debug)
+            flip_vert=flip_vert, sync_interval=sync_interval, debug=debug,
         return b
 
     def with_pretrained_uri(self, pretrained_uri):
