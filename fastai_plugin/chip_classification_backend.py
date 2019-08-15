@@ -206,6 +206,19 @@ class ChipClassificationBackend(Backend):
         tfms = get_transforms(flip_vert=self.train_opts.flip_vert)
 
         data = (ImageList.from_folder(chip_dir)
+                .split_by_folder(train='train', valid='val'))
+        train_count = None
+        if self.train_opts.train_count is not None:
+            train_count = min(len(data.train), self.train_opts.train_count)
+        elif self.train_opts.train_prop != 1.0:
+            train_count = int(round(self.train_opts.train_prop * len(data.train)))
+        train_items = data.train.items
+        if train_count is not None:
+            train_inds = np.random.permutation(np.arange(len(data.train)))[0:train_count]
+            train_items = train_items[train_inds]
+        items = np.concatenate([train_items, data.valid.items])
+
+        data = (ImageList(items, chip_dir)
                 .split_by_folder(train='train', valid='val')
                 .label_from_folder(classes=classes)
                 .transform(tfms, size=size)
