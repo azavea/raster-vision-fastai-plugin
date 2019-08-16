@@ -15,7 +15,7 @@ class TrainOptions():
                  one_cycle=None,
                  num_epochs=None, model_arch=None, fp16=None,
                  flip_vert=None, sync_interval=None, debug=None,
-                 train_prop=None, train_count=None):
+                 train_prop=None, train_count=None, use_tensorboard=None):
         self.batch_sz = batch_sz
         self.weight_decay = weight_decay
         self.lr = lr
@@ -28,6 +28,7 @@ class TrainOptions():
         self.debug = debug
         self.train_prop = train_prop
         self.train_count = train_count
+        self.use_tensorboard = use_tensorboard
 
     def __setattr__(self, name, value):
         if name in ['batch_sz', 'num_epochs', 'sync_interval']:
@@ -60,7 +61,8 @@ class ChipClassificationBackendConfigBuilder(SimpleBackendConfigBuilder):
             sync_interval=1,
             debug=False,
             train_prop=1.0,
-            train_count=None):
+            train_count=None,
+            use_tensorboard=False):
         """Set options for training models.
 
         Args:
@@ -91,6 +93,8 @@ class ChipClassificationBackendConfigBuilder(SimpleBackendConfigBuilder):
                 proportion of the training set is used for training
             train_count: (int) number of training examples to use during
                 training
+            use_tensorboard: (bool) if True, log events to Tensorboard and
+                start a Tensorboard server at port 6006
         """
         b = deepcopy(self)
         b.train_opts = TrainOptions(
@@ -98,7 +102,8 @@ class ChipClassificationBackendConfigBuilder(SimpleBackendConfigBuilder):
             one_cycle=one_cycle,
             num_epochs=num_epochs, model_arch=model_arch, fp16=fp16,
             flip_vert=flip_vert, sync_interval=sync_interval, debug=debug,
-            train_prop=train_prop, train_count=train_count)
+            train_prop=train_prop, train_count=train_count,
+            use_tensorboard=use_tensorboard)
         return b
 
     def with_pretrained_uri(self, pretrained_uri):

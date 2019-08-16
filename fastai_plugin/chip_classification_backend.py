@@ -32,7 +32,7 @@ from rastervision.data.label_source.utils import color_to_triple
 
 from fastai_plugin.utils import (
     SyncCallback, MySaveModelCallback, ExportCallback, MyCSVLogger,
-    Precision, Recall, FBeta, zipdir)
+    Precision, Recall, FBeta, zipdir, TensorboardLogger)
 
 
 log = logging.getLogger(__name__)
@@ -267,6 +267,9 @@ class ChipClassificationBackend(Backend):
             SyncCallback(train_dir, self.backend_opts.train_uri,
                          self.train_opts.sync_interval)
         ]
+
+        if self.train_opts.use_tensorboard:
+            callbacks.append(TensorboardLogger(learn, 'run'))
 
         lr = self.train_opts.lr
         num_epochs = self.train_opts.num_epochs
