@@ -7,6 +7,7 @@ from pathlib import Path
 import random
 import logging
 import json
+from subprocess import Popen
 
 import matplotlib
 matplotlib.use("Agg")
@@ -22,14 +23,14 @@ from fastai.vision.transform import dihedral
 from rastervision.utils.files import (
     get_local_path, make_dir, upload_or_copy, list_paths,
     download_if_needed, sync_from_dir, sync_to_dir, str_to_file)
-from rastervision.utils.misc import save_img
+from rastervision.utils.misc import save_img, terminate_at_exit
 from rastervision.backend import Backend
 from rastervision.data.label import SemanticSegmentationLabels
 from rastervision.data.label_source.utils import color_to_triple
 
 from fastai_plugin.utils import (
     SyncCallback, MySaveModelCallback, ExportCallback, MyCSVLogger,
-    Precision, Recall, FBeta, zipdir)
+    Precision, Recall, FBeta, zipdir, TensorboardLogger)
 
 
 log = logging.getLogger(__name__)
@@ -383,6 +384,16 @@ class SemanticSegmentationBackend(Backend):
                 oversample_callback.on_train_begin()
             make_debug_chips(data, class_map, tmp_dir, train_uri)
 
+        if self.train_opts.log_tensorboard:
+            callbacks.append(TensorboardLogger(learn, 'run'))
+
+        if self.train_opts.run_tensorboard:
+            log.info('Starting tensorboard process')
+            log_dir = join(train_dir, 'logs', 'run')
+            tensorboard_process = Popen(
+                ['tensorboard', '--logdir={}'.format(log_dir)])
+            terminate_at_exit(tensorboard_process)
+
         lr = self.train_opts.lr
         num_epochs = self.train_opts.num_epochs
         if self.train_opts.one_cycle:
@@ -394,6 +405,9 @@ class SemanticSegmentationBackend(Backend):
             learn.fit_one_cycle(num_epochs, lr, callbacks=callbacks)
         else:
             learn.fit(num_epochs, lr, callbacks=callbacks)
+
+        if self.train_opts.run_tensorboard:
+            tensorboard_process.terminate()
 
         # Since model is exported every epoch, we need some other way to
         # show that training is finished.

@@ -49,25 +49,26 @@ RUN curl -o ~/miniconda.sh -O  https://repo.continuum.io/miniconda/Miniconda3-la
 
 ENV PATH /opt/conda/bin:$PATH
 RUN conda install -y python=$PYTHON_VERSION
-RUN conda install -y -c pytorch magma-cuda100=2.5 torchvision=0.2
+RUN conda install -y -c pytorch pytorch=1.2 torchvision=0.4
 RUN conda install -y -c conda-forge awscli=1.16.* boto3=1.9.*
 RUN conda install -y jupyter=1.0.*
 RUN conda clean -ya
 
-ARG RV_COMMIT=99a9aaef9dd2040ee1feffe450a5d1e74f325674
-RUN pip install git+git://github.com/azavea/raster-vision.git@$RV_COMMIT
-RUN pip install ptvsd==4.2.*
-
 # See https://github.com/mapbox/rasterio/issues/1289
 ENV CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
-ARG FASTAI_COMMIT=585d107709c9af8d88ddf2e20eb06b4ad7f4f70f
+ARG FASTAI_COMMIT=de1b552b0556e86f18b61cdf23ba03317b30cfb6
 RUN cd /tmp && \
     wget https://github.com/fastai/fastai/archive/$FASTAI_COMMIT.zip && \
     unzip $FASTAI_COMMIT.zip && \
     cd fastai-$FASTAI_COMMIT && \
     pip install . && \
     cd .. && rm -R fastai-$FASTAI_COMMIT && rm $FASTAI_COMMIT.zip
+
+ARG RV_COMMIT=ab4f016349e4f241094da12bd81ca2cd41a9ee28
+RUN pip install git+git://github.com/azavea/raster-vision.git@$RV_COMMIT
+RUN pip install ptvsd==4.2.* tensorboardX==1.8 tensorboard==1.14.*
+RUN pip install future==0.17.*
 
 WORKDIR /opt/src
 

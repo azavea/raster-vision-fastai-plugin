@@ -8,6 +8,7 @@ import random
 import shutil
 import logging
 import json
+from subprocess import Popen
 
 import matplotlib
 matplotlib.use("Agg")
@@ -30,6 +31,7 @@ from rastervision.utils.misc import save_img
 from rastervision.backend import Backend
 from rastervision.data.label import ChipClassificationLabels
 from rastervision.data.label_source.utils import color_to_triple
+from rastervision.utils.misc import terminate_at_exit
 
 from fastai_plugin.utils import (
     SyncCallback, MySaveModelCallback, ExportCallback, MyCSVLogger,
@@ -261,8 +263,15 @@ class ChipClassificationBackend(Backend):
                          self.train_opts.sync_interval)
         ]
 
-        if self.train_opts.use_tensorboard:
+        if self.train_opts.log_tensorboard:
             callbacks.append(TensorboardLogger(learn, 'run'))
+
+        if self.train_opts.run_tensorboard:
+            log.info('Starting tensorboard process')
+            log_dir = join(train_dir, 'logs', 'run')
+            tensorboard_process = Popen(
+                ['tensorboard', '--logdir={}'.format(log_dir)])
+            terminate_at_exit(tensorboard_process)
 
         lr = self.train_opts.lr
         num_epochs = self.train_opts.num_epochs
@@ -275,6 +284,9 @@ class ChipClassificationBackend(Backend):
             learn.fit_one_cycle(num_epochs, lr, callbacks=callbacks)
         else:
             learn.fit(num_epochs, lr, callbacks=callbacks)
+
+        if self.train_opts.run_tensorboard:
+            tensorboard_process.terminate()
 
         # Since model is exported every epoch, we need some other way to
         # show that training is finished.
