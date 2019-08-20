@@ -219,6 +219,7 @@ class ChipClassificationBackend(Backend):
                 .transform(tfms, size=size)
                 .databunch(bs=self.train_opts.batch_sz,
                            num_workers=num_workers))
+        log.info(str(data))
 
         if self.train_opts.debug:
             make_debug_chips(data, class_map, tmp_dir, train_uri)
@@ -235,9 +236,9 @@ class ChipClassificationBackend(Backend):
             path=train_dir)
         learn.unfreeze()
 
-        if self.train_opts.fp16 and torch.cuda.is_available():
-            # This loss_scale works for Resnet 34 and 50. You might need to adjust this
-            # for other models.
+        if self.train_opts.mixed_prec and torch.cuda.is_available():
+            # This loss_scale works for Resnet 34 and 50. You might need to
+            # adjust this for other models.
             learn = learn.to_fp16(loss_scale=256)
 
         # Setup callbacks and train model.

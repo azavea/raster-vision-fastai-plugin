@@ -13,7 +13,7 @@ FASTAI_CHIP_CLASSIFICATION = 'FASTAI_CHIP_CLASSIFICATION'
 class TrainOptions():
     def __init__(self, batch_sz=None, weight_decay=None, lr=None,
                  one_cycle=None,
-                 num_epochs=None, model_arch=None, fp16=None,
+                 num_epochs=None, model_arch=None, mixed_prec=None,
                  flip_vert=None, sync_interval=None, debug=None,
                  train_prop=None, train_count=None, log_tensorboard=None,
                  run_tensorboard=None):
@@ -23,7 +23,7 @@ class TrainOptions():
         self.one_cycle = one_cycle
         self.num_epochs = num_epochs
         self.model_arch = model_arch
-        self.fp16 = fp16
+        self.mixed_prec = mixed_prec
         self.flip_vert = flip_vert
         self.sync_interval = sync_interval
         self.debug = debug
@@ -58,7 +58,7 @@ class ChipClassificationBackendConfigBuilder(SimpleBackendConfigBuilder):
             one_cycle=True,
             num_epochs=1,
             model_arch='resnet18',
-            fp16=False,
+            mixed_prec=False,
             flip_vert=True,
             sync_interval=1,
             debug=False,
@@ -84,8 +84,11 @@ class ChipClassificationBackendConfigBuilder(SimpleBackendConfigBuilder):
             model_arch: (str) classification model backbone to use for UNet
                 architecture. Any option in torchvision.models is valid, for
                 example, resnet18.
-            fp16: (bool) use mixed-precision training. Ideally, this will make
-                things run 2x fast.
+            mixed_prec: (bool) use mixed-precision training. Ideally, this will
+                make things run ~2x fast if GPU supports half-precision training
+                (such as on Tesla V100). All arrays should be divisible by
+                8 to maximize speed gains.
+                See https://docs.nvidia.com/deeplearning/sdk/mixed-precision-training/index.html
             flip_vert: (bool) use vertical flips and rotations for data aug
             sync_interval: (int) sync training directory to cloud every
                 sync_interval epochs.
@@ -106,7 +109,7 @@ class ChipClassificationBackendConfigBuilder(SimpleBackendConfigBuilder):
         b.train_opts = TrainOptions(
             batch_sz=batch_sz, weight_decay=weight_decay, lr=lr,
             one_cycle=one_cycle,
-            num_epochs=num_epochs, model_arch=model_arch, fp16=fp16,
+            num_epochs=num_epochs, model_arch=model_arch, mixed_prec=mixed_prec,
             flip_vert=flip_vert, sync_interval=sync_interval, debug=debug,
             train_prop=train_prop, train_count=train_count,
             log_tensorboard=log_tensorboard, run_tensorboard=run_tensorboard)
