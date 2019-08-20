@@ -48,7 +48,7 @@ class PotsdamSemanticSegmentation(rv.ExperimentSet):
         }
 
         task = rv.TaskConfig.builder(rv.SEMANTIC_SEGMENTATION) \
-                            .with_chip_size(300) \
+                            .with_chip_size(256) \
                             .with_classes(classes) \
                             .with_chip_options(window_method='sliding',
                                                stride=300, debug_chip_probability=1.0) \
@@ -180,6 +180,20 @@ class PotsdamSemanticSegmentation(rv.ExperimentSet):
             'lr': 1e-4,
             'sync_interval': 10,
             'model_arch': 'resnet50'
+        }
+        return self.get_exp(exp_id, config, raw_uri, processed_uri, root_uri,
+                            test)
+
+    def exp_resnet50_mixed_prec(self, raw_uri, processed_uri, root_uri, test=False):
+        exp_id = 'resnet50-mixed-prec'
+        config = {
+            'batch_sz': 8,
+            'num_epochs': 5,
+            'debug': False,
+            'lr': 1e-4,
+            'sync_interval': 10,
+            'model_arch': 'resnet50',
+            'mixed_prec': True
         }
         return self.get_exp(exp_id, config, raw_uri, processed_uri, root_uri,
                             test)

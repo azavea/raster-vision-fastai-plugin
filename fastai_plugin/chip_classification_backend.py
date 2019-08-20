@@ -7,6 +7,8 @@ from pathlib import Path
 import random
 import shutil
 import logging
+import json
+from subprocess import Popen
 
 import matplotlib
 matplotlib.use("Agg")
@@ -29,16 +31,31 @@ from rastervision.utils.misc import save_img
 from rastervision.backend import Backend
 from rastervision.data.label import ChipClassificationLabels
 from rastervision.data.label_source.utils import color_to_triple
+from rastervision.utils.misc import terminate_at_exit
 
 from fastai_plugin.utils import (
     SyncCallback, MySaveModelCallback, ExportCallback, MyCSVLogger,
-    Precision, Recall, FBeta, zipdir)
+    Precision, Recall, FBeta, zipdir, TensorboardLogger)
 
 
 log = logging.getLogger(__name__)
 
 
-def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=.5, count=20):
+def make_debug_chips(data, class_map, tmp_dir, train_uri, max_count=30):
+    """Save debug chips for a fastai DataBunch.
+
+    This saves a plot for each example in the training and validation sets into
+    train-debug-chips.zip and valid-debug-chips.zip under the train_uri. This
+    is useful for making sure we are feeding correct data into the model.
+
+    Args:
+        data: fastai DataBunch for a semantic segmentation dataset
+        class_map: (rv.ClassMap) class map used to map class ids to colors
+        tmp_dir: (str) path to temp directory
+        train_uri: (str) URI of root of training output
+        max_count: (int) maximum number of chips to generate. If None,
+            generates all of them.
+    """
     def _make_debug_chips(split):
         debug_chips_dir = join(tmp_dir, '{}-debug-chips'.format(split))
         zip_path = join(tmp_dir, '{}-debug-chips.zip'.format(split))
@@ -47,13 +64,13 @@ def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=.5, count=2
         ds = data.train_ds if split == 'train' else data.valid_ds
         n = 0
         for i, (x, y) in enumerate(ds):
-            if n >= count:
+            if i >= max_count:
                 break
-            if random.uniform(0, 1) < debug_prob:
-                x.show(y=y)
-                plt.savefig(join(debug_chips_dir, '{}.png'.format(i)), figsize=(5, 5))
-                plt.close()
-            n += 1
+
+            x.show(y=y)
+            plt.savefig(join(debug_chips_dir, '{}.png'.format(i)), figsize=(5, 5))
+            plt.close()
+
         zipdir(debug_chips_dir, zip_path)
         upload_or_copy(zip_path, zip_uri)
 
@@ -61,186 +78,106 @@ def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=.5, count=2
     _make_debug_chips('val')
 
 
-def merge_class_dirs(scene_class_dirs, output_dir):
-    seen_classes = set([])
-    chip_ind = 0
-    for scene_class_dir in scene_class_dirs:
-        for class_name, src_class_dir in scene_class_dir.items():
-            dst_class_dir = join(output_dir, class_name)
-            if class_name not in seen_classes:
-                make_dir(dst_class_dir)
-                seen_classes.add(class_name)
-
-            for src_class_file in [
-                    join(src_class_dir, class_file)
-                    for class_file in os.listdir(src_class_dir)
-            ]:
-                dst_class_file = join(dst_class_dir, '{}.png'.format(chip_ind))
-                shutil.move(src_class_file, dst_class_file)
-                chip_ind += 1
-
-
-class FileGroup(object):
-    def __init__(self, base_uri, tmp_dir):
-        self.tmp_dir = tmp_dir
-        self.base_uri = base_uri
-        self.base_dir = self.get_local_path(base_uri)
-
-        make_dir(self.base_dir)
-
-    def get_local_path(self, uri):
-        return get_local_path(uri, self.tmp_dir)
-
-    def upload_or_copy(self, uri):
-        upload_or_copy(self.get_local_path(uri), uri)
-
-    def download_if_needed(self, uri):
-        return download_if_needed(uri, self.tmp_dir)
-
-
-class DatasetFiles(FileGroup):
-    """Utilities for files produced when calling convert_training_data."""
-
-    def __init__(self, base_uri, tmp_dir):
-        FileGroup.__init__(self, base_uri, tmp_dir)
-
-        self.partition_id = uuid.uuid4()
-
-        self.training_zip_uri = join(base_uri, 'training-{}.zip'.format(self.partition_id))
-        self.training_local_uri = join(self.base_dir, 'training-{}'.format(self.partition_id))
-        self.training_download_uri = self.get_local_path(join(self.base_uri, 'training'))
-        make_dir(self.training_local_uri)
-
-        self.validation_zip_uri = join(base_uri, 'validation-{}.zip'.format(self.partition_id))
-        self.validation_local_uri = join(self.base_dir, 'validation-{}'.format(self.partition_id))
-        self.validation_download_uri = self.get_local_path(join(self.base_uri, 'validation'))
-        make_dir(self.validation_local_uri)
-
-    def download(self):
-        def _download(split, output_dir):
-            scene_class_dirs = []
-            for uri in list_paths(self.base_uri, 'zip'):
-                base_name = os.path.basename(uri)
-                if base_name.startswith(split):
-                    data_zip_path = self.download_if_needed(uri)
-                    data_dir = os.path.splitext(data_zip_path)[0]
-                    shutil.unpack_archive(data_zip_path, data_dir)
-
-                    # Append each of the directories containing this partitions'
-                    # labeled images based on the class directory.
-                    data_dir_subdirectories = next(os.walk(data_dir))[1]
-                    scene_class_dirs.append(
-                        dict([(class_name, os.path.join(data_dir, class_name))
-                              for class_name in data_dir_subdirectories]))
-            merge_class_dirs(scene_class_dirs, output_dir)
-
-        _download('training', self.training_download_uri)
-        _download('validation', self.validation_download_uri)
-
-    def upload(self):
-        def _upload(data_dir, zip_uri, split):
-            if not any(os.scandir(data_dir)):
-                log.warn(
-                    'No data to write for split {} in partition {}...'.format(
-                        split, self.partition_id))
-            else:
-                shutil.make_archive(data_dir, 'zip', data_dir)
-                upload_or_copy(data_dir + '.zip', zip_uri)
-
-        _upload(self.training_local_uri, self.training_zip_uri, 'training')
-        _upload(self.validation_local_uri, self.validation_zip_uri,
-                'validation')
-
-
 class ChipClassificationBackend(Backend):
+    """Chip classification backend using PyTorch and fastai."""
     def __init__(self, task_config, backend_opts, train_opts):
+        """Constructor.
+
+        Args:
+            task_config: (ChipClassificationBackendConfig)
+            backend_opts: (simple_backend_config.BackendOptions)
+            train_opts: (chip_classification_backend_config.TrainOptions)
+        """
         self.task_config = task_config
         self.backend_opts = backend_opts
         self.train_opts = train_opts
         self.inf_learner = None
 
-    def print_options(self):
-        # TODO get logging to work for plugins
-        print('Backend options')
-        print('--------------')
-        for k, v in self.backend_opts.__dict__.items():
-            print('{}: {}'.format(k, v))
-        print()
-
-        print('Train options')
-        print('--------------')
-        for k, v in self.train_opts.__dict__.items():
-            print('{}: {}'.format(k, v))
-        print()
+    def log_options(self):
+        log.info('backend_opts:\n' + json.dumps(
+            self.backend_opts.__dict__, indent=4))
+        log.info('train_opts:\n' + json.dumps(
+            self.train_opts.__dict__, indent=4))
 
     def process_scene_data(self, scene, data, tmp_dir):
-        """Process each scene's training data.
+        """Make training chips for a scene.
 
-        This writes 
-        {tmp_dir}/scratch-{uuid}/
-            {scene_id}-{uuid}/
-                {class_name}/
-                    {chip_idx}.png
+        This writes a set of image chips to {scene_id}/{class_name}/{scene_id}-{ind}.png
 
         Args:
-            scene: Scene
-            data: TrainingData
+            scene: (rv.data.Scene)
+            data: (rv.data.Dataset)
+            tmp_dir: (str) path to temp directory
 
         Returns:
-            backend-specific data-structures consumed by backend's
-            process_sceneset_results
+            (str) path to directory with scene chips {tmp_dir}/{scene_id}
         """
+        scene_dir = join(tmp_dir, str(scene.id))
 
-        scratch_dir = join(tmp_dir, 'scratch-{}'.format(uuid.uuid4()))
-        # Ensure directory is unique since scene id's could be shared between
-        # training and test sets.
-        scene_dir = join(scratch_dir, '{}-{}'.format(scene.id, uuid.uuid4()))
-        class_dirs = {}
-
-        for chip_idx, (chip, window, labels) in enumerate(data):
+        for ind, (chip, window, labels) in enumerate(data):
             class_id = labels.get_cell_class_id(window)
             # If a chip is not associated with a class, don't
             # use it in training data.
             if class_id is None:
                 continue
+
             class_name = self.task_config.class_map.get_by_id(class_id).name
             class_dir = join(scene_dir, class_name)
             make_dir(class_dir)
-            class_dirs[class_name] = class_dir
-            chip_name = '{}.png'.format(chip_idx)
-            chip_path = join(class_dir, chip_name)
+            chip_path = join(class_dir, '{}-{}.png'.format(scene.id, ind))
             save_img(chip, chip_path)
 
-        return class_dirs
+        return scene_dir
 
-    def process_sceneset_results(self, training_results, validation_results, tmp_dir):
-        """After all scenes have been processed, process the result set.
+    def process_sceneset_results(self, training_results, validation_results,
+                                 tmp_dir):
+        """Write zip file with chips for a set of scenes.
 
-        This writes two zip files:
-            training-{uuid}.zip
-            validation-{uuid}.zip
-        each containing
-            {class_name}/{chip_idx}.png
+        This writes a zip file for a group of scenes at {chip_uri}/{uuid}.zip containing:
+        train-img/{class_name}/{scene_id}-{ind}.png
+        val-img/{class_name}/{scene_id}-{ind}.png
+
+        This method is called once per instance of the chip command.
+        A number of instances of the chip command can run simultaneously to
+        process chips in parallel. The uuid in the path above is what allows
+        separate instances to avoid overwriting each others' output.
 
         Args:
-            training_results: dependent on the ml_backend's process_scene_data
-            validation_results: dependent on the ml_backend's
-                process_scene_data
+            training_results: list of directories generated by process_scene_data
+                that all hold training chips
+            validation_results: list of directories generated by process_scene_data
+                that all hold validation chips
         """
-        self.print_options()
+        self.log_options()
 
-        dataset_files = DatasetFiles(self.backend_opts.chip_uri, tmp_dir)
-        training_dir = dataset_files.training_local_uri
-        validation_dir = dataset_files.validation_local_uri
+        group = str(uuid.uuid4())
+        group_uri = join(self.backend_opts.chip_uri, '{}.zip'.format(group))
+        group_path = get_local_path(group_uri, tmp_dir)
+        make_dir(group_path, use_dirname=True)
 
-        merge_class_dirs(training_results, training_dir)
-        merge_class_dirs(validation_results, validation_dir)
-        dataset_files.upload()
+        with zipfile.ZipFile(group_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            def _write_zip(scene_dirs, split):
+                for scene_dir in scene_dirs:
+                    scene_paths = glob.glob(join(scene_dir, '**/*.png'))
+                    for path in scene_paths:
+                        class_name, fn = path.split('/')[-2:]
+                        zipf.write(path, join(split, class_name, fn))
+            _write_zip(training_results, 'train')
+            _write_zip(validation_results, 'val')
 
+        upload_or_copy(group_path, group_uri)
 
     def train(self, tmp_dir):
-        """Train a model."""
-        self.print_options()
+        """Train a model.
+
+        This downloads any previous output saved to the train_uri,
+        starts training (or resumes from a checkpoint), periodically
+        syncs contents of train_dir to train_uri and after training finishes.
+
+        Args:
+            tmp_dir: (str) path to temp directory
+        """
+        self.log_options()
 
         # Sync output of previous training run from cloud.
         train_uri = self.backend_opts.train_uri
@@ -248,77 +185,41 @@ class ChipClassificationBackend(Backend):
         make_dir(train_dir)
         sync_from_dir(train_uri, train_dir)
 
-        '''
-            Get zip file for each group, and unzip them into chip_dir in a
-            way that works well with FastAI.
-
-            The resulting directory structure would be:
-            <chip_dir>/
-                train/
-                    training-<uuid1>/
-                        <class1>/
-                            ...
-                        <class2>/
-                            ...
-                        ...
-                    training-<uuid2>/
-                        <class1>/
-                            ...
-                        <class2>/
-                            ...
-                        ...
-                    ...
-                val/
-                    validation-<uuid1>/
-                        <class1>/
-                            ...
-                        <class2>/
-                            ...
-                        ...
-                    validation-<uuid2>/
-                        <class1>/
-                            ...
-                        <class2>/
-                            ...
-                        ...
-                    ...
-
-        '''
-        chip_dir = join(tmp_dir, 'chips/')
+        # Get zip file for each group, and unzip them into chip_dir.
+        chip_dir = join(tmp_dir, 'chips')
         make_dir(chip_dir)
         for zip_uri in list_paths(self.backend_opts.chip_uri, 'zip'):
-            zip_name = Path(zip_uri).name
-            if zip_name.startswith('train'):
-                extract_dir = chip_dir + 'train/'
-            elif zip_name.startswith('val'):
-                extract_dir = chip_dir + 'val/'
-            else:
-                continue
             zip_path = download_if_needed(zip_uri, tmp_dir)
             with zipfile.ZipFile(zip_path, 'r') as zipf:
-                zipf.extractall(extract_dir)
+                zipf.extractall(chip_dir)
 
         # Setup data loader.
-        def get_label_path(im_path):
-            return Path(str(im_path.parent)[:-4] + '-labels') / im_path.name
-
         size = self.task_config.chip_size
         class_map = self.task_config.class_map
         classes = class_map.get_class_names()
         num_workers = 0 if self.train_opts.debug else 4
         tfms = get_transforms(flip_vert=self.train_opts.flip_vert)
 
-        def get_data(train_sampler=None):
-            data = (ImageList.from_folder(chip_dir)
-                    .split_by_folder(train='train', valid='val')
-                    .label_from_folder()
-                    .transform(tfms, size=size)
-                    .databunch(bs=self.train_opts.batch_sz,
-                               num_workers=num_workers,
-                               train_sampler=train_sampler))
-            return data
+        data = (ImageList.from_folder(chip_dir)
+                .split_by_folder(train='train', valid='val'))
+        train_count = None
+        if self.train_opts.train_count is not None:
+            train_count = min(len(data.train), self.train_opts.train_count)
+        elif self.train_opts.train_prop != 1.0:
+            train_count = int(round(self.train_opts.train_prop * len(data.train)))
+        train_items = data.train.items
+        if train_count is not None:
+            train_inds = np.random.permutation(np.arange(len(data.train)))[0:train_count]
+            train_items = train_items[train_inds]
+        items = np.concatenate([train_items, data.valid.items])
 
-        data = get_data()
+        data = (ImageList(items, chip_dir)
+                .split_by_folder(train='train', valid='val')
+                .label_from_folder(classes=classes)
+                .transform(tfms, size=size)
+                .databunch(bs=self.train_opts.batch_sz,
+                           num_workers=num_workers))
+        log.info(str(data))
 
         if self.train_opts.debug:
             make_debug_chips(data, class_map, tmp_dir, train_uri)
@@ -333,12 +234,11 @@ class ChipClassificationBackend(Backend):
         learn = cnn_learner(
             data, model_arch, metrics=metrics, wd=self.train_opts.weight_decay,
             path=train_dir)
-        
         learn.unfreeze()
 
-        if self.train_opts.fp16 and torch.cuda.is_available():
-            # This loss_scale works for Resnet 34 and 50. You might need to adjust this
-            # for other models.
+        if self.train_opts.mixed_prec and torch.cuda.is_available():
+            # This loss_scale works for Resnet 34 and 50. You might need to
+            # adjust this for other models.
             learn = learn.to_fp16(loss_scale=256)
 
         # Setup callbacks and train model.
@@ -346,7 +246,7 @@ class ChipClassificationBackend(Backend):
 
         pretrained_uri = self.backend_opts.pretrained_uri
         if pretrained_uri:
-            print('Loading weights from pretrained_uri: {}'.format(
+            log.info('Loading weights from pretrained_uri: {}'.format(
                 pretrained_uri))
             pretrained_path = download_if_needed(pretrained_uri, tmp_dir)
             learn.model.load_state_dict(
@@ -364,6 +264,16 @@ class ChipClassificationBackend(Backend):
                          self.train_opts.sync_interval)
         ]
 
+        if self.train_opts.log_tensorboard:
+            callbacks.append(TensorboardLogger(learn, 'run'))
+
+        if self.train_opts.run_tensorboard:
+            log.info('Starting tensorboard process')
+            log_dir = join(train_dir, 'logs', 'run')
+            tensorboard_process = Popen(
+                ['tensorboard', '--logdir={}'.format(log_dir)])
+            terminate_at_exit(tensorboard_process)
+
         lr = self.train_opts.lr
         num_epochs = self.train_opts.num_epochs
         if self.train_opts.one_cycle:
@@ -371,10 +281,13 @@ class ChipClassificationBackend(Backend):
                 learn.lr_find()
                 learn.recorder.plot(suggestion=True, return_fig=True)
                 lr = learn.recorder.min_grad_lr
-                print('lr_find() found lr: {}'.format(lr))
+                log.info('lr_find() found lr: {}'.format(lr))
             learn.fit_one_cycle(num_epochs, lr, callbacks=callbacks)
         else:
             learn.fit(num_epochs, lr, callbacks=callbacks)
+
+        if self.train_opts.run_tensorboard:
+            tensorboard_process.terminate()
 
         # Since model is exported every epoch, we need some other way to
         # show that training is finished.
@@ -386,7 +299,7 @@ class ChipClassificationBackend(Backend):
     def load_model(self, tmp_dir):
         """Load the model in preparation for one or more prediction calls."""
         if self.inf_learner is None:
-            self.print_options()
+            self.log_options()
             model_uri = self.backend_opts.model_uri
             model_path = download_if_needed(model_uri, tmp_dir)
             self.inf_learner = load_learner(
@@ -394,14 +307,16 @@ class ChipClassificationBackend(Backend):
             self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     def predict(self, chips, windows, tmp_dir):
-        """Return predictions for a chip using model.
+        """Return predictions for a batch of chips.
 
         Args:
-            chips: [[height, width, channels], ...] numpy array of chips
-            windows: List of boxes that are the windows aligned with the chips.
+            chips: (numpy.ndarray) of shape (n, height, width, nb_channels)
+                containing a batch of chips
+            windows: (List<Box>) windows that are aligned with the chips which
+                are aligned with the chips.
 
         Return:
-            Labels object containing predictions
+            (ChipClassificationLabels) containing predictions
         """
         self.load_model(tmp_dir)
 
@@ -417,7 +332,6 @@ class ChipClassificationBackend(Backend):
         for class_probs, window in zip(preds, windows):
             # Add 1 to class_id since they start at 1.
             class_id = int(class_probs.argmax() + 1)
-
             labels.set_cell(window, class_id, class_probs)
 
         return labels

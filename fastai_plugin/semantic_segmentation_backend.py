@@ -5,6 +5,9 @@ import zipfile
 import glob
 from pathlib import Path
 import random
+import logging
+import json
+from subprocess import Popen
 
 import matplotlib
 matplotlib.use("Agg")
@@ -20,14 +23,17 @@ from fastai.vision.transform import dihedral
 from rastervision.utils.files import (
     get_local_path, make_dir, upload_or_copy, list_paths,
     download_if_needed, sync_from_dir, sync_to_dir, str_to_file)
-from rastervision.utils.misc import save_img
+from rastervision.utils.misc import save_img, terminate_at_exit
 from rastervision.backend import Backend
 from rastervision.data.label import SemanticSegmentationLabels
 from rastervision.data.label_source.utils import color_to_triple
 
 from fastai_plugin.utils import (
     SyncCallback, MySaveModelCallback, ExportCallback, MyCSVLogger,
-    Precision, Recall, FBeta, zipdir)
+    Precision, Recall, FBeta, zipdir, TensorboardLogger)
+
+
+log = logging.getLogger(__name__)
 
 
 # Deprecated and just here so old models can be unpickled.
@@ -35,7 +41,7 @@ def semseg_acc(input, target):
     pass
 
 
-def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
+def make_debug_chips(data, class_map, tmp_dir, train_uri, max_count=30):
     """Save debug chips for a fastai DataBunch.
 
     This saves a plot for each example in the training and validation sets into
@@ -47,7 +53,8 @@ def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
         class_map: (rv.ClassMap) class map used to map class ids to colors
         tmp_dir: (str) path to temp directory
         train_uri: (str) URI of root of training output
-        debug_prob: (float) probability of saving a debug plot for each example
+        max_count: (int) maximum number of chips to generate. If None,
+            generates all of them.
     """
     if 0 in class_map.get_keys():
         colors = [class_map.get_by_id(i).color
@@ -74,19 +81,25 @@ def make_debug_chips(data, class_map, tmp_dir, train_uri, debug_prob=1.0):
             for x, y in zip(x_batch, y_batch):
                 x = x.squeeze()
                 y = y.squeeze()
-                if random.uniform(0, 1) < debug_prob:
-                    # fastai has an x.show(y=y) method, but we need to plot the
-                    # debug chips ourselves in order to use
-                    # a custom color map that matches the colors in the class_map.
-                    # This could be a good things to contribute upstream to fastai.
-                    plt.axis('off')
-                    plt.imshow(x.data.permute((1, 2, 0)).numpy())
-                    plt.imshow(y.data.squeeze().numpy(), alpha=0.4, vmin=0,
-                               vmax=len(colors), cmap=cmap)
-                    plt.savefig(join(debug_chips_dir, '{}.png'.format(i)),
-                                figsize=(3, 3))
-                    plt.close()
-                    i += 1
+
+                # fastai has an x.show(y=y) method, but we need to plot the
+                # debug chips ourselves in order to use
+                # a custom color map that matches the colors in the class_map.
+                # This could be a good things to contribute upstream to fastai.
+                plt.axis('off')
+                plt.imshow(x.data.permute((1, 2, 0)).numpy())
+                plt.imshow(y.data.squeeze().numpy(), alpha=0.4, vmin=0,
+                            vmax=len(colors), cmap=cmap)
+                plt.savefig(join(debug_chips_dir, '{}.png'.format(i)),
+                            figsize=(3, 3))
+                plt.close()
+                i += 1
+
+                if i > max_count:
+                    break
+            if i > max_count:
+                break
+
         zipdir(debug_chips_dir, zip_path)
         upload_or_copy(zip_path, zip_uri)
 
@@ -164,77 +177,26 @@ def tta_predict(learner, im_arr):
     return label_arr
 
 
-def subset_training_data(chip_dir, count=None, prop=None):
-    """Specify a subset of all the training chips that have been created
-
-    This creates uses the train_opts 'train_count' or 'train_prop' parameter to
-        subset a number (n) of the training chips. The function prioritizes
-        'train_count' and falls back to 'train_prop' if 'train_count' is not set.
-        It creates two new directories 'train-{n}-img' and 'train-{n}-labels' with
-        subsets of the chips that the dataloader can read from.
-
-    Args:
-        chip_dir (str): path to the chip directory
-
-    Returns:
-        (str) name of the train subset image directory (e.g. 'train-{n}-img')
-    """
-    all_train_uri = join(chip_dir, 'train-img')
-    all_train = list(filter(lambda x: x.endswith(
-        '.png'), os.listdir(all_train_uri)))
-    all_train.sort()
-
-    if count:
-        if count > len(all_train):
-            raise Exception('Value for "train_count" ({}) must be less '
-                            'than or equal to the total number of chips ({}) '
-                            'in the train set.'.format(count, len(all_train)))
-        sample_size = int(count)
-    else:
-        if prop > 1 or prop < 0:
-            raise Exception('Value for "train_prop" must be between 0 and 1, got {}.'.format(prop))
-        if prop == 1:
-            return 'train-img'
-        sample_size = round(prop * len(all_train))
-
-    random.seed(100)
-    sample_images = random.sample(all_train, sample_size)
-
-    def _copy_train_chips(img_or_labels):
-        all_uri = join(chip_dir, 'train-{}'.format(img_or_labels))
-        sample_dir = 'train-{}-{}'.format(str(sample_size), img_or_labels)
-        sample_dir_uri = join(chip_dir, sample_dir)
-        make_dir(sample_dir_uri)
-        for s in sample_images:
-            upload_or_copy(join(all_uri, s), join(sample_dir_uri, s))
-        return sample_dir
-
-    for i in ('labels', 'img'):
-        d = _copy_train_chips(i)
-
-    return d
-
-
 class SemanticSegmentationBackend(Backend):
+    """Semantic segmentation backend using PyTorch and fastai."""
     def __init__(self, task_config, backend_opts, train_opts):
+        """Constructor.
+
+        Args:
+            task_config: (SemanticSegmentationBackendConfig)
+            backend_opts: (simple_backend_config.BackendOptions)
+            train_opts: (semantic_segmentation_backend_config.TrainOptions)
+        """
         self.task_config = task_config
         self.backend_opts = backend_opts
         self.train_opts = train_opts
         self.inf_learner = None
 
-    def print_options(self):
-        # TODO get logging to work for plugins
-        print('Backend options')
-        print('--------------')
-        for k, v in self.backend_opts.__dict__.items():
-            print('{}: {}'.format(k, v))
-        print()
-
-        print('Train options')
-        print('--------------')
-        for k, v in self.train_opts.__dict__.items():
-            print('{}: {}'.format(k, v))
-        print()
+    def log_options(self):
+        log.info('backend_opts:\n' + json.dumps(
+            self.backend_opts.__dict__, indent=4))
+        log.info('train_opts:\n' + json.dumps(
+            self.train_opts.__dict__, indent=4))
 
     def process_scene_data(self, scene, data, tmp_dir):
         """Make training chips for a scene.
@@ -288,7 +250,7 @@ class SemanticSegmentationBackend(Backend):
             validation_results: list of directories generated by process_scene_data
                 that all hold validation chips
         """
-        self.print_options()
+        self.log_options()
 
         group = str(uuid.uuid4())
         group_uri = join(self.backend_opts.chip_uri, '{}.zip'.format(group))
@@ -320,7 +282,7 @@ class SemanticSegmentationBackend(Backend):
         Args:
             tmp_dir: (str) path to temp directory
         """
-        self.print_options()
+        self.log_options()
 
         # Sync output of previous training run from cloud.
         train_uri = self.backend_opts.train_uri
@@ -347,16 +309,27 @@ class SemanticSegmentationBackend(Backend):
             classes = ['nodata'] + classes
         num_workers = 0 if self.train_opts.debug else 4
 
-        train_img_dir = subset_training_data(
-            chip_dir, self.train_opts.train_count, self.train_opts.train_prop)
-
         data = (SegmentationItemList.from_folder(chip_dir)
-                .split_by_folder(train=train_img_dir, valid='val-img')
+                .split_by_folder(train='train-img', valid='val-img'))
+        train_count = None
+        if self.train_opts.train_count is not None:
+            train_count = min(len(data.train), self.train_opts.train_count)
+        elif self.train_opts.train_prop != 1.0:
+            train_count = int(round(self.train_opts.train_prop * len(data.train)))
+        train_items = data.train.items
+        if train_count is not None:
+            train_inds = np.random.permutation(np.arange(len(data.train)))[0:train_count]
+            train_items = train_items[train_inds]
+        items = np.concatenate([train_items, data.valid.items])
+
+        data = (SegmentationItemList(items, chip_dir)
+                .split_by_folder(train='train-img', valid='val-img')
                 .label_from_func(get_label_path, classes=classes)
                 .transform(get_transforms(flip_vert=self.train_opts.flip_vert),
                            size=size, tfm_y=True)
                 .databunch(bs=self.train_opts.batch_sz,
                            num_workers=num_workers))
+        print(data)
 
         # Setup learner.
         ignore_idx = 0
@@ -370,7 +343,7 @@ class SemanticSegmentationBackend(Backend):
             bottle=True, path=train_dir)
         learn.unfreeze()
 
-        if self.train_opts.fp16 and torch.cuda.is_available():
+        if self.train_opts.mixed_prec and torch.cuda.is_available():
             # This loss_scale works for Resnet 34 and 50. You might need to adjust this
             # for other models.
             learn = learn.to_fp16(loss_scale=256)
@@ -411,6 +384,16 @@ class SemanticSegmentationBackend(Backend):
                 oversample_callback.on_train_begin()
             make_debug_chips(data, class_map, tmp_dir, train_uri)
 
+        if self.train_opts.log_tensorboard:
+            callbacks.append(TensorboardLogger(learn, 'run'))
+
+        if self.train_opts.run_tensorboard:
+            log.info('Starting tensorboard process')
+            log_dir = join(train_dir, 'logs', 'run')
+            tensorboard_process = Popen(
+                ['tensorboard', '--logdir={}'.format(log_dir)])
+            terminate_at_exit(tensorboard_process)
+
         lr = self.train_opts.lr
         num_epochs = self.train_opts.num_epochs
         if self.train_opts.one_cycle:
@@ -423,6 +406,9 @@ class SemanticSegmentationBackend(Backend):
         else:
             learn.fit(num_epochs, lr, callbacks=callbacks)
 
+        if self.train_opts.run_tensorboard:
+            tensorboard_process.terminate()
+
         # Since model is exported every epoch, we need some other way to
         # show that training is finished.
         str_to_file('done!', self.backend_opts.train_done_uri)
@@ -433,7 +419,7 @@ class SemanticSegmentationBackend(Backend):
     def load_model(self, tmp_dir):
         """Load the model in preparation for one or more prediction calls."""
         if self.inf_learner is None:
-            self.print_options()
+            self.log_options()
             model_uri = self.backend_opts.model_uri
             model_path = download_if_needed(model_uri, tmp_dir)
             self.inf_learner = load_learner(
@@ -445,8 +431,8 @@ class SemanticSegmentationBackend(Backend):
         Args:
             chips: (numpy.ndarray) of shape (1, height, width, nb_channels)
                 containing a single imagery chip
-            windows: List containing a single window which is aligned with the
-                chip
+            windows: List containing a single (Box) window which is aligned
+                with the chip
 
         Return:
             (SemanticSegmentationLabels) containing predictions
@@ -463,6 +449,7 @@ class SemanticSegmentationBackend(Backend):
         else:
             label_arr = self.inf_learner.predict(im)[1].squeeze().numpy()
 
+        # TODO better explanation
         # Return "trivial" instance of SemanticSegmentationLabels that holds a single
         # window and has ability to get labels for that one window.
         def label_fn(_window):

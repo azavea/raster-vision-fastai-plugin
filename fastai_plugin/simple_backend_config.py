@@ -12,6 +12,7 @@ from rastervision.task import SemanticSegmentationConfig
 
 
 class BackendOptions():
+    """Option that pertain to backends created using SimpleBackendConfig."""
     def __init__(self, chip_uri=None, train_uri=None, train_done_uri=None,
                  model_uri=None, pretrained_uri=None):
         self.chip_uri = chip_uri
@@ -22,7 +23,21 @@ class BackendOptions():
 
 
 class SimpleBackendConfig(BackendConfig):
+    """A simplified BackendConfig interface.
+
+    This class can be subclassed to created BackendConfigs with less effort
+    and a small loss of flexibility when compared to directly subclassing
+    BackendConfig. See subclasses of this for examples of how to write your
+    own subclass.
+    """
     def __init__(self, backend_opts, train_opts):
+        """Constructor.
+
+        Args:
+            backend_opts: (BackendOptions)
+            train_opts: (train_opts_class) object containing options that are
+                set by with_train_options()
+        """
         super().__init__(self.backend_type)
         self.backend_opts = backend_opts
         self.train_opts = train_opts
@@ -30,16 +45,19 @@ class SimpleBackendConfig(BackendConfig):
     @property
     @abstractmethod
     def train_opts_class(self):
+        """The class that holds options set by with_train_options in the builder."""
         pass
 
     @property
     @abstractmethod
     def backend_type(self):
+        """The string representing this backend used in the registry."""
         pass
 
     @property
     @abstractmethod
     def backend_class(self):
+        """The class of the actual Backend that this class configures."""
         pass
 
     def to_proto(self):
@@ -113,6 +131,13 @@ class SimpleBackendConfig(BackendConfig):
 
 
 class SimpleBackendConfigBuilder(BackendConfigBuilder):
+    """A simplified BackendConfigBuilder interface.
+
+    This class can be subclassed to created BackendConfigBuilders with less
+    effort and a small loss of flexibility when compared to directly
+    subclassing BackendConfigBuilder. See subclasses of this for examples of
+    how to write your own subclass.
+    """
     def __init__(self, prev_config=None):
         self.backend_opts = BackendOptions()
         self.train_opts = self.config_class.train_opts_class()
@@ -127,10 +152,12 @@ class SimpleBackendConfigBuilder(BackendConfigBuilder):
     @property
     @abstractmethod
     def config_class(self):
+        """The corresponding Config class for this builder."""
         pass
 
     @abstractmethod
     def with_train_options(self):
+        """Sets the training options which are passed to the Backend."""
         pass
 
     def build(self):
