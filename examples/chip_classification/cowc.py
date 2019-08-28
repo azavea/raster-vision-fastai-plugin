@@ -22,10 +22,10 @@ class CowcChipClassificationExperiments(rv.ExperimentSet):
         """
         test = str_to_bool(test)
         exp_id = 'cowc-chip-classification'
-        num_epochs = 20
-        batch_sz = 32
+        num_epochs = 50
+        batch_sz = 16
         debug = False
-        lr = 1e-4
+        lr = 2e-5
         model_arch = 'resnet18'
         sync_interval = 10
         train_scene_ids = ['2_10', '2_11', '2_12', '2_14', '3_11',
