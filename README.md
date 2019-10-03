@@ -2,6 +2,10 @@
 
 This plugin uses [PyTorch](https://pytorch.org/) and [fastai](https://docs.fast.ai/) to implement a semantic segmentation backend plugin for [Raster Vision](https://rastervision.io/).
 
+⚠️ This repo is deprecated, as Raster Vision 0.10 has built-in PyTorch backends. However, it still may be useful as an example of how to construct a backend plugin.
+
+⚠️ The object detection backend is in a partially completed state and does not work.
+
 ## Setup and Requirements
 
 ### Docker
